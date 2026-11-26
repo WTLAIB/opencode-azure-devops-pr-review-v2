@@ -934,8 +934,10 @@ conversation's directory there, as a message of its own; and when a source
 changes while a session runs, it leaves an update. Neither is shown to a
 private session's model: the `context` hook takes them out of every request,
 whether or not the parts could be told apart, and an update whatever source
-it is of, the date and the environment among them (a review that runs past
-midnight is not told the new date). Which messages they are is the session's
+it is of, the date and the environment among them: a session that runs past
+midnight is not told the new date by such a message (a session of the same
+review that begins afterwards has it from its first request). Which messages
+they are is the session's
 own word (`hostInstructions` in `host.mjs`). An update is a `system` message,
 which only the host writes. A load is a synthetic message that names the
 files it holds; that metadata is what the host itself goes by, as its only
@@ -1035,7 +1037,9 @@ is refused, when it is prepared or when it is sent and whatever for (the
 turn, the session's agent or model, a look at the session that failed, a
 dispatch that was not prepared), also ends what an earlier request of the
 turn allowed; a summary that the host attempts beside the turn is none of its
-requests, and its refusal ends nothing. A stage's record counts those readings and the requests refused
+requests, and its refusal ends nothing. A request that is refused because the
+session's messages could not be read is counted apart (`turnUnreadable`):
+nothing was known of its turn. A stage's record counts those readings and the requests refused
 outside a turn (`turnChecks`, `refusedOutsideTurn`).
 
 What a session read, for the check that a finding names a file its own tools

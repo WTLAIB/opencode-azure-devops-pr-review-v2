@@ -5,7 +5,7 @@ import { chmod, mkdir, mkdtemp, readdir, rm, readFile, stat, writeFile } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { prepareComments, publishPlan, PLANNING_FINDINGS_PER_PAGE, PAGE_CONTINUATIONS, discussionDigest, parseLocation, pairable, sourceWindow, mergeCandidates, candidatePages, repeatEligible, severitySets, boundedGroups } from '../src/comment-work.mjs';
-import { createCommentData, captureObservation, observationIndex, anchorObservations, observationKey, heldItems, putOnce, pageRows, wholePages, ROW_CHARACTERS } from '../src/comment-data.mjs';
+import { createCommentData, captureObservation, observationIndex, anchorObservations, observationKey, putOnce, pageRows, pagesOf as writtenPages, ROW_CHARACTERS } from '../src/comment-data.mjs';
 import { HOST_READ_LINE_CHARACTERS } from '../src/host.mjs';
 import { createAzureClient, parsePullRequestUrl, markersInThreads } from '../src/azure.mjs';
 import { createToolQueue } from '../src/tool-queue.mjs';
@@ -1589,84 +1589,74 @@ test('the rows of a private value\'s pages come back whole through the host\'s r
   };
   for (const [name, text] of Object.entries(texts)) {
     for (const [reference, written] of [[await store.put(text), text], [await store.object({ value: text, list: [text.slice(0, 5000)] }), JSON.stringify({ value: text, list: [text.slice(0, 5000)] }, null, 2)]]) {
-      // The pages as the put left them: a read through the store would write pages again that were not right.
+      // The pages as the put left them: this version's own file, which is one layout for one text.
       const content = await readFile(reference.pages, 'utf8');
-      const whole = await store.read(reference);
-      assert.equal(whole, written, name);
-      // What tells that a pages file gives its value whole says so of every file this version writes, and of
-      // nothing that is a part of it, a row longer than the host returns, another text or another order.
-      assert.equal(wholePages(content, whole), true, name);
-      const first = content.slice(0, content.indexOf('\n') + 1), rest = content.slice(first.length);
-      for (const [what, other] of [['no rows', ''], ['no line end', content.slice(0, -1)], ['a row less', first], ['its rows the other way round', rest + first], ['a row twice', first + content],
-        ['another text', content.replace(/"text":"(.)/, (match, character) => `"text":"${character === 'Q' ? 'R' : 'Q'}`)], ['a text that is longer', content], ['something else', 'not rows\n'], ['a row that is no object', `null\n${content}`]]) {
-        assert.equal(wholePages(other, what === 'a text that is longer' ? `${whole}.` : whole), false, `${name}: ${what}`);
-      }
+      assert.ok(reference.pages.endsWith('.rows.jsonl'), name);
+      assert.equal(content, writtenPages(written), name);
+      // The same rows are there under the name an earlier version hands out, as one file.
+      assert.deepEqual([await readFile(earlierPages(reference), 'utf8'), await inode(earlierPages(reference))], [content, await inode(reference.pages)], name);
+      assert.equal(await store.read(reference), written, name);
       const lines = content.split('\n');
       assert.equal(lines.pop(), '', name);
       assert.ok(lines.length > 1, `${name}: more than one row`);
       const rows = lines.map(line => { assert.ok(line.length <= ROW_CHARACTERS, `${name}: a row of ${line.length} characters`); return JSON.parse(hostRead(line)); });
-      assert.equal(rows.map(row => row.text).join(''), whole, `${name}: the rows are the value`);
+      assert.equal(rows.map(row => row.text).join(''), written, `${name}: the rows are the value`);
       rows.forEach((row, index) => {
         assert.deepEqual([row.start, row.end - row.start], [index ? rows[index - 1].end : 0, row.text.length], `${name}: row ${index} continues the one before`);
         assert.doesNotMatch(row.text, /[\uD800-\uDBFF]$/, `${name}: no surrogate pair is split`);
       });
     }
   }
-  assert.deepEqual(pageRows(''), [], 'An empty value has no row.');
-  assert.deepEqual([wholePages('\n', ''), wholePages('', ''), wholePages('\n', 'x'), wholePages(`${JSON.stringify({ start: 0, end: 0, text: '' })}\n`, '')], [true, false, false, false], 'Its pages file is a line end, and nothing else is.');
-  // A row is judged by what the host's read returns of a line, not by the length this version writes.
-  const row = size => `${JSON.stringify({ start: 0, end: size, text: 'y'.repeat(size) })}\n`;
-  let size = 1900;
-  while (row(size).length - 1 < HOST_READ_LINE_CHARACTERS) size++;
-  assert.deepEqual([row(size).length - 1, wholePages(row(size), 'y'.repeat(size)), wholePages(row(size + 1), 'y'.repeat(size + 1))], [HOST_READ_LINE_CHARACTERS, true, false]);
+  assert.deepEqual([pageRows(''), writtenPages('')], [[], '\n'], 'An empty value has no row, and its pages file is a line end.');
+  assert.ok(ROW_CHARACTERS < HOST_READ_LINE_CHARACTERS, 'A row is shorter than what the host\'s read returns of a line.');
   assert.deepEqual(pageRows('abc').map(row => JSON.parse(row)), [{ start: 0, end: 3, text: 'abc' }]);
-  // A model reads a row as it stands, not as it parses: a member that is there twice, one more, another order
-  // or another spelling parses to the same page, or to more than the page, and is not what was written.
-  assert.equal(wholePages('{"start":0,"end":3,"text":"abc"}\n', 'abc'), true);
-  for (const [what, written] of [['a text twice', '{"start":0,"end":3,"text":"xyz","text":"abc"}'], ['a start twice', '{"start":7,"start":0,"end":3,"text":"abc"}'],
-    ['a member more', '{"start":0,"end":3,"text":"abc","note":"read this too"}'], ['another order', '{"text":"abc","start":0,"end":3}'],
-    ['blanks', '{"start": 0, "end": 3, "text": "abc"}'], ['another escape', '{"start":0,"end":3,"text":"\\u0061bc"}'], ['a list', '[{"start":0,"end":3,"text":"abc"}]']]) {
-    assert.equal(wholePages(`${written}\n`, 'abc'), false, what);
-  }
+  assert.equal(writtenPages('abc'), '{"start":0,"end":3,"text":"abc"}\n');
   // A row ends at a line break where one lies in its second half.
   const broken = pageRows(`${'a'.repeat(1200)}\n${'b'.repeat(1200)}`).map(row => JSON.parse(row));
   assert.deepEqual(broken.map(row => [row.start, row.end]), [[0, 1201], [1201, 2401]]);
+  // One name, one layout: a model reads a pages file by itself, row by row, and a file that is complete is never
+  // written again in another layout. A change that makes other rows of these texts (the length of a row, what
+  // the host's read returns of a line, where a row ends) needs another name for the pages it writes (`PAGES`
+  // in comment-data.mjs), and then this digest is that layout's.
+  assert.equal(createHash('sha256').update(Object.values(texts).map(writtenPages).join('')).digest('hex'), '75a1ee1de340a33b1cee0405c36587c5ec903a5fe46f8f0dac3fde1fdad05bbc',
+    'The rows of a `.rows.jsonl` file are no longer what this version wrote: give the pages of another layout another name.');
 });
 
-// As 0.5.0 wrote a pages file: rows of 3,000 characters of text.
+// As 0.5.0 and earlier wrote a pages file, under their name for it: rows of 3,000 characters of text.
 const earlierRows = text => { const rows = []; for (let start = 0; start < text.length; start += 3000) rows.push(JSON.stringify({ start, end: Math.min(text.length, start + 3000), text: text.slice(start, start + 3000) })); return rows.join('\n') + '\n'; };
+const earlierPages = reference => `${reference.file}.pages.jsonl`;
+// A reference as a review that 0.5.0 saved holds it: it names that version's pages.
+const savedEarlier = reference => ({ ...reference, pages: earlierPages(reference) });
 const rowsOf = async reference => (await readFile(reference.pages, 'utf8')).trimEnd().split('\n');
+const inode = async path => (await stat(path)).ino;
+// A file as something else left it, or gone (`null`): a file of its own, since a put leaves a value's rows under
+// two names that are one file, and what is written into one of them would be in the other.
+const leave = async (path, content) => { await rm(path, { force: true, recursive: true }); if (content !== null) await writeFile(path, content); };
 
-test('a value is made ready when it is handed out: pages that do not give it whole through the host\'s read are written again, whoever wrote them', async t => {
+test('this version\'s pages are a file of their own name and one layout; a value is made ready when it is handed out, and what an earlier version wrote is left as it is', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'azpr-comment-data-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const first = await createCommentData({ root: directory });
   const text = Array.from({ length: 300 }, (_, i) => `line ${i} of a tool output that a review saved`).join('\n');
-  const whole = async (reference, value) => { const rows = await rowsOf(reference); assert.ok(rows.every(row => row.length <= ROW_CHARACTERS)); assert.equal(rows.map(row => JSON.parse(row).text).join(''), value); };
-  // As 0.5.0 wrote them: rows the host's read cuts.
-  const reference = await first.put(text);
-  await writeFile(reference.pages, earlierRows(text));
-  assert.ok((await rowsOf(reference)).some(row => row.length > HOST_READ_LINE_CHARACTERS), 'The earlier rows are longer than the host returns.');
-  // One row of exactly the length the host's read returns, and one a character longer: only the second is cut.
-  let length = 1900;
-  const oneRow = size => JSON.stringify({ start: 0, end: size, text: 'y'.repeat(size) });
-  while (oneRow(length).length < HOST_READ_LINE_CHARACTERS) length++;
-  assert.deepEqual([oneRow(length).length, oneRow(length + 1).length], [HOST_READ_LINE_CHARACTERS, HOST_READ_LINE_CHARACTERS + 1]);
-  const fits = await first.put('y'.repeat(length)), over = await first.put('y'.repeat(length + 1));
-  await writeFile(fits.pages, `${oneRow(length)}\n`);
-  await writeFile(over.pages, `${oneRow(length + 1)}\n`);
-  // Pages that are not there, that are empty, that stop in a row, that stop after a row, and that hold something
-  // else: what a writer that was cut off leaves, or anything that is not the value.
-  const values = Object.fromEntries(['missing', 'empty', 'cut in a row', 'cut after a row', 'another text', 'no rows'].map(name => [name, `${name}: ${'v'.repeat(4000)}`]));
+  const right = async (reference, value) => assert.deepEqual([await readFile(reference.file, 'utf8'), await readFile(`${reference.file}.rows.jsonl`, 'utf8')], [value, writtenPages(value)]);
+  // A value as 0.5.0 saved it: its object, and pages with rows the host's read cuts. No pages of this version.
+  const put = await first.put(text), saved = savedEarlier(put);
+  await rm(put.pages);
+  await leave(saved.pages, earlierRows(text));
+  assert.ok((await readFile(saved.pages, 'utf8')).split('\n').some(row => row.length > HOST_READ_LINE_CHARACTERS), 'The earlier rows are longer than the host returns.');
+  // Pages of this version in every state a writer that was cut off, or anything else, can leave them in.
+  const values = Object.fromEntries(['missing', 'empty', 'cut in a row', 'cut after a row', 'another text', 'no rows', 'a row that says its text twice', 'rows of another length'].map(name => [name, `${name}: ${'v'.repeat(4000)}`]));
   const stored = {};
   for (const [name, value] of Object.entries(values)) stored[name] = await first.put(value);
   const written = async name => readFile(stored[name].pages, 'utf8');
   await rm(stored.missing.pages);
-  await writeFile(stored.empty.pages, '');
-  await writeFile(stored['cut in a row'].pages, (await written('cut in a row')).slice(0, 2500));
-  await writeFile(stored['cut after a row'].pages, `${(await rowsOf(stored['cut after a row']))[0]}\n`);
-  await writeFile(stored['another text'].pages, (await written('another text')).replace('another text', 'another TEXT'));
-  await writeFile(stored['no rows'].pages, 'left by something else\n');
+  await leave(stored.empty.pages, '');
+  await leave(stored['cut in a row'].pages, (await written('cut in a row')).slice(0, 2500));
+  await leave(stored['cut after a row'].pages, `${(await rowsOf(stored['cut after a row']))[0]}\n`);
+  await leave(stored['another text'].pages, (await written('another text')).replace('another text', 'another TEXT'));
+  await leave(stored['no rows'].pages, 'left by something else\n');
+  await leave(stored['a row that says its text twice'].pages, (await written('a row that says its text twice')).replace('"text":', '"text":"something else","text":'));
+  await leave(stored['rows of another length'].pages, earlierRows(values['rows of another length']));
   // Opening the store looks at nothing and changes nothing: a value is made ready when it is handed out. Only
   // the directory is looked at, not what it holds: a store whose values cannot be listed is opened like any
   // other (an administrator lists every directory, so there is nothing to see as one), and one without its
@@ -1674,7 +1664,7 @@ test('a value is made ready when it is handed out: pages that do not give it who
   if (process.getuid?.() !== 0) {
     await chmod(join(first.directory, 'objects'), 0o300);
     await assert.rejects(readdir(join(first.directory, 'objects')), { code: 'EACCES' });
-    assert.equal(await (await createCommentData({ directory: first.directory })).read(fits), 'y'.repeat(length));
+    assert.equal(await (await createCommentData({ directory: first.directory })).read(put), text);
     await chmod(join(first.directory, 'objects'), 0o700);
   }
   await assert.rejects(createCommentData({ directory: join(directory, 'nowhere') }), { code: 'ENOENT' });
@@ -1682,74 +1672,110 @@ test('a value is made ready when it is handed out: pages that do not give it who
   await assert.rejects(createCommentData({ directory }), { code: 'ENOTDIR' });
   await rm(join(directory, 'objects'));
   const reopened = await createCommentData({ directory: first.directory });
-  assert.ok((await rowsOf(reference)).some(row => row.length > HOST_READ_LINE_CHARACTERS));
+  await assert.rejects(readFile(put.pages), { code: 'ENOENT' });
   await assert.rejects(readFile(stored.missing.pages), { code: 'ENOENT' });
-  // A reference that a review saved, asked for: the store holds it once its pages are whole.
-  assert.equal(await reopened.holds(reference), true);
-  await whole(reference, text);
-  assert.equal(await reopened.read(reference), text, 'The reference a saved review holds still names the object.');
-  assert.equal(await reopened.holds(fits), true);
-  assert.equal(await readFile(fits.pages, 'utf8'), `${oneRow(length)}\n`, 'Rows of another length than this version writes stay where the host returns them whole.');
-  assert.equal(await reopened.holds(over), true);
-  await whole(over, 'y'.repeat(length + 1));
-  for (const [name, value] of Object.entries(values)) { assert.equal(await reopened.read(stored[name]), value, name); await whole(stored[name], value); }
-  // Nothing says of a value at an earlier time that it is ready: an earlier version that still runs, or that is
-  // installed again for a while, writes pages of its own, and the next time the value is handed out sees them.
-  await writeFile(over.pages, earlierRows('y'.repeat(length + 1)));
-  assert.equal(await reopened.holds(over), true);
-  await whole(over, 'y'.repeat(length + 1));
-  assert.deepEqual((await readdir(first.directory)).sort(), ['.gitignore', 'objects'], 'The store holds no mark of its own.');
-  // The same when a value is put that another writer has written: an earlier version with its rows, a writer cut
-  // off in the object or in the pages, an object that is something else. The text in hand is the value, and the
-  // reference that is handed out names files that are right.
-  const late = (name, object, pages) => ({ value: `${name} ${'q'.repeat(7000)}`, object, pages });
-  for (const [name, { value, object, pages }] of Object.entries({
-    'an earlier version': late('an earlier version', v => v, earlierRows),
-    'cut off in the object': late('cut off in the object', v => v.slice(0, 3000), null),
-    'cut off in the pages': late('cut off in the pages', v => v, v => earlierRows(v).slice(0, 1000)),
-    'an object that is something else': late('an object that is something else', () => 'not the value', v => `${JSON.stringify({ start: 0, end: 5, text: 'other' })}\n`),
-  })) {
-    const file = join(first.directory, 'objects', `${createHash('sha256').update(value).digest('hex')}.txt`);
-    await writeFile(file, object(value));
-    if (pages) await writeFile(`${file}.pages.jsonl`, pages(value));
-    const again = await reopened.put(value);
-    assert.equal(again.file, file, name);
-    // The files as the put left them, before anything is read through the store, which would make them right.
-    assert.equal(await readFile(again.file, 'utf8'), value, name);
-    await whole(again, value);
-    assert.equal(await reopened.read(again), value, name);
+  // The reference that 0.5.0 saved is handed out with this version's pages, which are written for it. The
+  // earlier pages are left as they are: a process of that version may be reading them.
+  const earlier = await readFile(saved.pages, 'utf8'), earlierFile = await inode(saved.pages);
+  assert.deepEqual(await reopened.handed(saved), put, 'The reference that is handed out names the pages of this version.');
+  await right(put, text);
+  assert.deepEqual([await readFile(saved.pages, 'utf8'), await inode(saved.pages)], [earlier, earlierFile]);
+  assert.equal(await reopened.read(saved), text, 'The reference a saved review holds still names the object.');
+  // Pages of this version that are not what it writes are written again, each time the value is handed out;
+  // pages that are right are not touched, so that their layout never changes under a model that reads them.
+  for (const [name, value] of Object.entries(values)) {
+    assert.deepEqual(await reopened.handed(stored[name]), stored[name], name);
+    await right(stored[name], value);
+    const file = await inode(stored[name].pages);
+    assert.equal(await reopened.holds(stored[name]), true, name);
+    assert.equal(await inode(stored[name].pages), file, `${name}: pages that are right are left as they are`);
   }
+  await leave(stored.empty.pages, '');
+  assert.equal(await reopened.holds(stored.empty), true);
+  await right(stored.empty, values.empty);
+  assert.deepEqual((await readdir(first.directory)).sort(), ['.gitignore', 'objects'], 'The store holds no mark of its own.');
   // Pages that cannot be read are no pages: with a sound object they are replaced, when the value is handed out
-  // and when it is put. (An administrator reads every file, so there is nothing to see as one.)
+  // and when it is put.
   const locked = `locked ${'k'.repeat(5000)}`, lock = await reopened.put(locked);
   if (process.getuid?.() !== 0) {
     for (const hand of [() => reopened.holds(lock), () => reopened.put(locked)]) {
       await chmod(lock.pages, 0o000);
       await assert.rejects(readFile(lock.pages, 'utf8'), { code: 'EACCES' });
       assert.ok(await hand());
-      await whole(lock, locked);
+      await right(lock, locked);
       assert.equal((await stat(lock.pages)).mode & 0o777, 0o600);
     }
   }
-  // A row that says its text twice parses to the value and reads otherwise: such pages are written again.
-  const doubled = (await rowsOf(lock)).map(row => row.replace('"text":', '"text":"something else","text":')).join('\n') + '\n';
-  await writeFile(lock.pages, doubled);
-  assert.equal(await reopened.holds(lock), true);
-  assert.notEqual(await readFile(lock.pages, 'utf8'), doubled);
-  await whole(lock, locked);
+  // The same when a value is put that another writer has written: an earlier version with its pages, a writer
+  // cut off in the object or in the pages, an object that is something else. The text in hand is the value, the
+  // files are right as the put leaves them, before anything is read through the store, and what the earlier
+  // version wrote under its own name stays. Where there is nothing of that name, the put leaves these rows
+  // under it too, as the same file: an earlier version that opens the store hands that name out for every
+  // object it finds, and writes no pages for them.
+  const late = (name, object, rows, old) => ({ value: `${name} ${'q'.repeat(7000)}`, object, rows, old });
+  for (const [name, { value, object, rows, old }] of Object.entries({
+    'an earlier version': late('an earlier version', v => v, null, earlierRows),
+    'cut off in the object': late('cut off in the object', v => v.slice(0, 3000), null, null),
+    'cut off in the pages': late('cut off in the pages', v => v, v => writtenPages(v).slice(0, 1000), null),
+    'an object that is something else': late('an object that is something else', () => 'not the value', () => `${JSON.stringify({ start: 0, end: 5, text: 'other' })}\n`, v => earlierRows(v).slice(0, 900)),
+  })) {
+    const file = join(first.directory, 'objects', `${createHash('sha256').update(value).digest('hex')}.txt`);
+    await writeFile(file, object(value));
+    if (rows) await writeFile(`${file}.rows.jsonl`, rows(value));
+    if (old) await writeFile(`${file}.pages.jsonl`, old(value));
+    const earlierFile = old ? await inode(`${file}.pages.jsonl`) : undefined;
+    const again = await reopened.put(value);
+    assert.deepEqual([again.file, again.pages], [file, `${file}.rows.jsonl`], name);
+    await right(again, value);
+    if (old) assert.deepEqual([await readFile(`${file}.pages.jsonl`, 'utf8'), await inode(`${file}.pages.jsonl`)], [old(value), earlierFile], `${name}: the earlier pages are left as they are`);
+    else assert.deepEqual([await readFile(`${file}.pages.jsonl`, 'utf8'), await inode(`${file}.pages.jsonl`)], [writtenPages(value), await inode(again.pages)], `${name}: these rows are there under the earlier name too`);
+    assert.equal(await reopened.read(again), value, name);
+  }
   // Nor does a put say anything of a later one: a value this very store put before is looked at again when it is
   // put again, since its files may have been damaged since.
   const twice = `put twice ${'t'.repeat(6000)}`, once = await reopened.put(twice);
-  await writeFile(once.file, twice.slice(0, 100));
-  await writeFile(once.pages, earlierRows(twice));
+  await leave(once.file, twice.slice(0, 100));
+  await leave(once.pages, earlierRows(twice));
   assert.deepEqual(await reopened.put(twice), once);
-  assert.equal(await readFile(once.file, 'utf8'), twice);
-  await whole(once, twice);
+  await right(once, twice);
   // Two puts of one value at once are one, and each gets the reference.
   const both = await Promise.all([reopened.put(`${twice}!`), reopened.put(`${twice}!`)]);
   assert.deepEqual(both[0], both[1]);
-  await whole(both[0], `${twice}!`);
+  await right(both[0], `${twice}!`);
   assert.deepEqual((await readdir(join(first.directory, 'objects'))).filter(name => name.endsWith('.tmp')), [], 'No working file is left.');
+});
+
+test('a store this version wrote is one an earlier version can use: every object it finds there has pages of the name it hands out, which are there before the object is', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'azpr-comment-data-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = await createCommentData({ root: directory });
+  const texts = [`report ${'r'.repeat(9000)}`, Array.from({ length: 200 }, (_, i) => `line ${i} "quoted" \\ and more`).join('\n'), ''];
+  await store.put(texts[0]); await store.object({ list: texts[1] }); await store.put(texts[2]);
+  // As 0.5.0 opens a store and puts a value that is there: it lists the objects, writes nothing for one it
+  // found, and hands out the pages of its own name. After going back to that version, a review that this one
+  // saved is planned with them.
+  const found = (await readdir(join(store.directory, 'objects'))).filter(name => /^[a-f0-9]{64}\.txt$/.test(name));
+  assert.equal(found.length, 3);
+  for (const name of found) {
+    const file = join(store.directory, 'objects', name), lines = (await readFile(`${file}.pages.jsonl`, 'utf8')).split('\n');
+    assert.equal(lines.pop(), '');
+    assert.equal(lines.filter(Boolean).map(row => JSON.parse(row).text).join(''), await readFile(file, 'utf8'), 'The pages an earlier version hands out are the object, whole.');
+  }
+  // The pages are there before the object is: whoever finds an object finds its pages. A put that cannot write
+  // its object (a directory stands where it belongs) has written them, under both names.
+  const blocked = `blocked ${'b'.repeat(4000)}`, file = join(store.directory, 'objects', `${createHash('sha256').update(blocked).digest('hex')}.txt`);
+  await mkdir(file);
+  await writeFile(join(file, 'in the way'), '');
+  await assert.rejects(store.put(blocked));
+  assert.deepEqual([await readFile(`${file}.rows.jsonl`, 'utf8'), await readFile(`${file}.pages.jsonl`, 'utf8')], [writtenPages(blocked), writtenPages(blocked)]);
+  await rm(file, { recursive: true });
+  assert.equal(await store.read(await store.put(blocked)), blocked);
+  // What stands under the earlier name is never replaced, whatever it is, and a value is ready without it:
+  // this version reads its own pages.
+  const other = `something else under the earlier name ${'s'.repeat(4000)}`, place = join(store.directory, 'objects', `${createHash('sha256').update(other).digest('hex')}.txt`);
+  await mkdir(`${place}.pages.jsonl`);
+  const reference = await store.put(other);
+  assert.deepEqual([await readFile(reference.pages, 'utf8'), await store.read(reference), await store.handed(reference), (await stat(`${place}.pages.jsonl`)).isDirectory()], [writtenPages(other), other, reference, true]);
 });
 
 test('an object is what its name says by its bytes; one that is damaged or gone is written again from complete pages, and a value that cannot be made ready is not handed out', async t => {
@@ -1760,34 +1786,43 @@ test('an object is what its name says by its bytes; one that is damaged or gone 
   const fresh = await readFile(damaged.pages, 'utf8');
   const store = await createCommentData({ directory: first.directory });
   const whole = async (reference, value) => {
-    assert.deepEqual([await store.holds(reference), await store.read(reference), await readFile(reference.file, 'utf8')], [true, value, value]);
-    assert.ok((await rowsOf(reference)).every(row => row.length <= ROW_CHARACTERS));
-    assert.equal((await rowsOf(reference)).map(row => JSON.parse(row).text).join(''), value);
+    assert.deepEqual([await store.handed(reference), await store.holds(reference), await store.read(reference), await readFile(reference.file, 'utf8'), await readFile(reference.pages, 'utf8')],
+      [reference, true, value, value, writtenPages(value)]);
   };
-  const unready = async (reference, name) => {
-    assert.equal(await store.holds(reference), false, name);
+  const lost = async (reference, name) => {
+    assert.deepEqual([await store.handed(reference), await store.holds(reference)], [undefined, false], name);
     await assert.rejects(store.read(reference), /Private comment data changed; no plan was accepted\./, name);
   };
   // An object that lost its end and has no pages: a write that was cut off, or another process that still writes.
-  // Nothing is derived from it and the store does not hold its reference; the other values are not held back
+  // Nothing is derived from it and the store does not hand its reference out; the other values are not held back
   // for it; and putting its value writes it again.
-  await writeFile(damaged.file, 'z'.repeat(4000));
+  await leave(damaged.file, 'z'.repeat(4000));
   await rm(damaged.pages);
-  await unready(damaged, 'cut off, without pages');
+  await rm(earlierPages(damaged));
+  await lost(damaged, 'cut off, without pages');
   await assert.rejects(readFile(damaged.pages), { code: 'ENOENT' });
+  await assert.rejects(readFile(earlierPages(damaged)), { code: 'ENOENT' });
   await whole(sound, 'x'.repeat(5000));
   assert.deepEqual(await store.put('z'.repeat(9000)), damaged);
   await whole(damaged, 'z'.repeat(9000));
-  assert.equal(await readFile(damaged.pages, 'utf8'), fresh);
-  // The object damaged or gone, its pages complete: they hold the value, of whatever length their rows are and
-  // also where only the last line end is missing, and the object is written again from them.
-  for (const [name, pages] of [['rows of this version', fresh], ['rows of an earlier version', earlierRows('z'.repeat(9000))], ['without the last line end', fresh.slice(0, -1)]]) {
+  // The object damaged or gone, its pages complete: they hold the value, whether they are this version's, an
+  // earlier version's under its own name, or lack only their last line end, and the object is written again
+  // from them.
+  for (const [name, rows, old] of [['pages of this version', fresh, null], ['pages of an earlier version', null, earlierRows('z'.repeat(9000))], ['both', fresh, earlierRows('z'.repeat(9000))],
+    ['without the last line end', fresh.slice(0, -1), null], ['an earlier version\'s without the last line end', null, earlierRows('z'.repeat(9000)).slice(0, -1)]]) {
     for (const object of ['z'.repeat(4000), null]) {
-      if (object === null) await rm(damaged.file); else await writeFile(damaged.file, object);
-      await writeFile(damaged.pages, pages);
+      await leave(damaged.file, object);
+      await leave(damaged.pages, rows);
+      await leave(earlierPages(damaged), old);
+      // The value itself is read from them without a look at this version's pages; handing it out writes those.
+      assert.equal(await store.read(savedEarlier(damaged)), 'z'.repeat(9000), name);
+      assert.equal(await readFile(damaged.file, 'utf8'), 'z'.repeat(9000), name);
+      if (old === null) await assert.rejects(readFile(earlierPages(damaged)), { code: 'ENOENT' }, `${name}: a read writes no pages`);
       await whole(damaged, 'z'.repeat(9000));
+      assert.equal(await readFile(earlierPages(damaged), 'utf8'), old ?? writtenPages('z'.repeat(9000)), `${name}: the earlier pages are left as they are, and where there were none these rows are there under that name`);
     }
   }
+  await rm(earlierPages(damaged), { force: true });
   // An object is what its name says by its bytes: a write that was cut off inside its last character decodes to
   // the same text, and is not the object.
   const ending = await store.put(`${'e'.repeat(3000)}�`);
@@ -1796,35 +1831,41 @@ test('an object is what its name says by its bytes; one that is damaged or gone 
   assert.equal(await readFile(ending.file, 'utf8'), `${'e'.repeat(3000)}�`, 'Decoded, the cut object reads like the whole one.');
   assert.equal(await store.holds(ending), true);
   assert.deepEqual(await readFile(ending.file), bytes, 'It was told apart by its bytes, and written again from its pages.');
-  // Object and pages both cut: the value cannot be made ready, with rows of this version or of an earlier one.
+  // Object and pages both cut: the value cannot be made ready, with pages of this version or of an earlier one.
   // It is not handed out, nothing of it is changed, and the store goes on with its other values.
-  for (const pages of [fresh.slice(0, 3000), earlierRows('z'.repeat(9000)).slice(0, 7000)]) {
-    await writeFile(damaged.file, 'z'.repeat(4000));
-    await writeFile(damaged.pages, pages);
-    await unready(damaged, 'both cut');
-    assert.equal(await readFile(damaged.pages, 'utf8'), pages, 'What is there is left.');
+  for (const [rows, old] of [[fresh.slice(0, 3000), null], [null, earlierRows('z'.repeat(9000)).slice(0, 7000)], [fresh.slice(0, 3000), earlierRows('z'.repeat(9000)).slice(0, 7000)]]) {
+    await leave(damaged.file, 'z'.repeat(4000));
+    await leave(damaged.pages, rows);
+    await leave(earlierPages(damaged), old);
+    await lost(damaged, 'both cut');
+    assert.equal(await readFile(damaged.file, 'utf8'), 'z'.repeat(4000), 'What is there is left.');
+    if (rows !== null) assert.equal(await readFile(damaged.pages, 'utf8'), rows, 'What is there is left.');
     await whole(sound, 'x'.repeat(5000));
   }
-  // The pages of a sound object cannot be read or replaced (a directory stands where they belong): not handed
-  // out either. Once the obstacle is gone, the value is ready again: another look finds it so.
-  await writeFile(damaged.file, 'z'.repeat(9000));
-  await rm(damaged.pages);
+  await rm(earlierPages(damaged), { force: true });
+  // The pages of a sound object cannot be written (a directory stands where they belong): the value is not
+  // handed to a model, which could not read its pages, while the value itself can still be read. Once the
+  // obstacle is gone it is ready again: another look finds it so.
+  await leave(damaged.file, 'z'.repeat(9000));
+  await leave(damaged.pages, null);
   await mkdir(damaged.pages);
   await writeFile(join(damaged.pages, 'in the way'), '');
-  await unready(damaged, 'pages that cannot be written');
+  assert.deepEqual([await store.handed(damaged), await store.holds(damaged), await store.read(damaged)], [undefined, false, 'z'.repeat(9000)]);
   await rm(damaged.pages, { recursive: true });
   await whole(damaged, 'z'.repeat(9000));
   assert.deepEqual((await readdir(join(first.directory, 'objects'))).filter(name => name.endsWith('.tmp')), [], 'No working file is left.');
-  // Only a reference to this store's own values is looked at: another store's, a path of someone's choosing and
-  // a name that is no digest are not.
+  // Only a reference to this store's own values is looked at: another store's, a path of someone's choosing, a
+  // name that is no digest and pages of another name are not. One that names an earlier version's pages is.
   const elsewhere = await (await createCommentData({ root: directory })).put('x'.repeat(5000));
-  for (const reference of [elsewhere, { ...sound, file: join(directory, 'somewhere', 'else.txt') }, { ...sound, sha256: '../x', file: join(first.directory, 'objects', '../x.txt') }, { ...sound, pages: join(directory, 'other.jsonl') }, null]) {
-    assert.equal(await store.holds(reference), false);
+  for (const reference of [elsewhere, { ...sound, file: join(directory, 'somewhere', 'else.txt') }, { ...sound, sha256: '../x', file: join(first.directory, 'objects', '../x.txt') }, { ...sound, pages: join(directory, 'other.jsonl') },
+    { ...sound, pages: `${sound.file}.other.jsonl` }, null]) {
+    assert.deepEqual([await store.handed(reference), await store.holds(reference)], [undefined, false]);
     await assert.rejects(store.read(reference), /Unknown private comment data reference\./);
   }
+  assert.deepEqual([await store.handed(savedEarlier(sound)), await store.handed({ ...sound, pages: undefined })], [sound, sound]);
 });
 
-test('a value is stored as the text a file can hold, and only a reference the store holds ready is listed for a model', async t => {
+test('a value is stored as the text a file can hold; a saved review\'s observations are listed as they are handed out, a few values at a time; and a run puts a value once', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'azpr-comment-data-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = await createCommentData({ root: directory });
@@ -1832,97 +1873,91 @@ test('a value is stored as the text a file can hold, and only a reference the st
   // surrogate itself. The value is the text the object holds, in both.
   const given = `tool output with half a pair \uD83D and more ${'m'.repeat(2500)}`, kept = given.replace('\uD83D', '�');
   const reference = await store.put(given);
-  // The files as the put left them, before anything is read through the store, which would make the pages right.
-  assert.deepEqual([(await rowsOf(reference)).map(row => JSON.parse(row).text).join(''), await readFile(reference.file, 'utf8'), await store.read(reference), reference.characters],
-    [kept, kept, kept, kept.length]);
+  // The files as the put left them.
+  assert.deepEqual([await readFile(reference.pages, 'utf8'), await readFile(reference.file, 'utf8'), await store.read(reference), reference.characters], [writtenPages(kept), kept, kept, kept.length]);
   assert.deepEqual(await store.put(kept), reference, 'Both texts are one value.');
-  const pages = await readFile(reference.pages, 'utf8');
   const reopened = await createCommentData({ directory: store.directory });
-  assert.equal(await reopened.holds(reference), true);
-  assert.equal(await readFile(reference.pages, 'utf8'), pages, 'Handed out again, the value is ready as it is.');
-  // What the planner is listed as evidence it may read: observations whose saved references the store holds
-  // ready when the list is made. One whose object and pages were cut since, one whose files are gone and one of
-  // another store are left out; one whose object is gone and whose pages are complete is written again and listed.
+  // What the planner is listed as evidence it may read: the observations of the review whose saved references
+  // the store can hand out when the list is made, each as it is handed out, with the pages of this version. One
+  // that 0.5.0 saved names that version's pages and is listed with these; one whose object and pages were cut
+  // since, one whose files are gone and one of another store are left out; one whose object is gone and whose
+  // pages are complete is written again and listed.
   const output = index => `observed text ${index} ${'o'.repeat(3000)}`;
-  const observations = await Promise.all([0, 1, 2, 3].map(index => captureObservation(reopened, 'azpr_read_file', { path: `/src/file-${index}.ts`, version: 'head' }, output(index))));
+  const observations = await Promise.all([0, 1, 2, 3, 4].map(index => captureObservation(reopened, 'azpr_read_file', { path: `/src/file-${index}.ts`, version: 'head' }, output(index))));
   const elsewhere = await captureObservation(await createCommentData({ root: directory }), 'azpr_read_file', { path: '/src/elsewhere.ts', version: 'head' }, output(9));
-  await writeFile(observations[1].outputRef.file, 'cut');
-  await writeFile(observations[1].outputRef.pages, (await readFile(observations[1].outputRef.pages, 'utf8')).slice(0, 900));
-  await rm(observations[2].outputRef.file);
-  await rm(observations[2].outputRef.pages);
+  await leave(observations[1].outputRef.file, 'cut');
+  await leave(observations[1].outputRef.pages, (await readFile(observations[1].outputRef.pages, 'utf8')).slice(0, 900));
+  await leave(earlierPages(observations[1].outputRef), earlierRows(output(1)).slice(0, 900));
+  for (const gone of [observations[2].outputRef.file, observations[2].outputRef.pages, earlierPages(observations[2].outputRef)]) await rm(gone);
   await rm(observations[3].outputRef.file);
-  // The same store, still open: what was ready when its value was put is looked at again when it is handed out.
-  const listed = async () => (await reopened.read(await observationIndex(reopened, [...observations, elsewhere]))).trim().split('\n').map(row => JSON.parse(row)).map(row => row.arguments.path);
-  assert.deepEqual(await listed(), ['/src/file-0.ts', '/src/file-3.ts']);
-  assert.equal(await readFile(observations[3].outputRef.file, 'utf8'), output(3));
+  const current = observations[4].outputRef;
+  await rm(current.pages);
+  await leave(earlierPages(current), earlierRows(output(4)));
+  observations[4] = { ...observations[4], outputRef: savedEarlier(current) };
+  const listed = async () => (await reopened.read(await observationIndex(reopened, [...observations, elsewhere]))).trim().split('\n').map(row => JSON.parse(row));
+  const rows = await listed();
+  assert.deepEqual(rows.map(row => row.arguments.path), ['/src/file-0.ts', '/src/file-3.ts', '/src/file-4.ts']);
+  assert.deepEqual(rows.map(row => row.output), [observations[0].outputRef, observations[3].outputRef, current], 'Each names the pages of this version.');
+  assert.deepEqual([await readFile(observations[3].outputRef.file, 'utf8'), await readFile(current.pages, 'utf8'), await readFile(earlierPages(current), 'utf8')], [output(3), writtenPages(output(4)), earlierRows(output(4))]);
   // And one that another writer has made right since is listed the next time.
-  await writeFile(observations[1].outputRef.file, output(1));
-  assert.deepEqual(await listed(), ['/src/file-0.ts', '/src/file-1.ts', '/src/file-3.ts']);
+  await leave(observations[1].outputRef.file, output(1));
+  assert.deepEqual((await listed()).map(row => row.arguments.path), ['/src/file-0.ts', '/src/file-1.ts', '/src/file-3.ts', '/src/file-4.ts']);
   assert.equal(observations[0].key, observationKey('azpr_read_file', { path: '/src/file-0.ts', version: 'head' }, output(0)), 'An observation is known by its key before it is saved.');
-  // A list is handed out a few values at a time, each value once however many items name it, and in its order:
-  // a large review has thousands of observations, and each is read whole to be made ready. The limit is of
-  // values, not of items: an item may name two.
-  const many = await Promise.all(Array.from({ length: 30 }, (_, index) => reopened.put(`value ${index % 20} ${'n'.repeat(300)}`)));
-  const more = await Promise.all(Array.from({ length: 30 }, (_, index) => reopened.put(`another ${index} ${'a'.repeat(300)}`)));
-  await rm(many[7].file);
-  await rm(many[7].pages);
-  await rm(more[11].file);
-  await rm(more[11].pages);
-  let running = 0, most = 0;
+  // The values of a list are looked at a few at a time, each value once however many observations name it, and
+  // in their order: a large review has thousands of observations, and each is read whole to be made ready.
+  const text = index => `source of file ${index}\n${'s'.repeat(400)}`;
+  const sources = await Promise.all(Array.from({ length: 20 }, (_, index) => captureObservation(reopened, 'azpr_read_file', { path: `/src/anchor-${index}.ts`, version: 'c'.repeat(40) }, text(index))));
+  const diffs = await Promise.all(sources.map((source, index) => captureObservation(reopened, 'azpr_read_diff', { path: `/src/anchor-${index}.ts`, version: 'c'.repeat(40) }, text(index))));
+  for (const gone of [sources[5].outputRef.file, sources[5].outputRef.pages, earlierPages(sources[5].outputRef)]) await rm(gone);
+  let running = 0, most = 0, wanted = true;
   const asked = [];
-  const counting = { ...reopened, async holds(reference) { asked.push(reference.sha256); most = Math.max(most, ++running); try { return await reopened.holds(reference); } finally { running--; } } };
-  const items = many.map((reference, index) => ({ index, reference, other: more[index] }));
-  const handed = await heldItems(counting, items, item => [item.reference, item.other]);
-  assert.deepEqual(handed.map(item => item.index), items.filter(item => item.index % 20 !== 7 && item.index !== 11).map(item => item.index), 'In their order, without the ones of which a value is gone.');
-  assert.deepEqual([asked.length, new Set(asked).size, most], [50, 50, 8], 'Each of the 50 values was looked at once, eight at a time.');
-  assert.deepEqual(await heldItems(counting, [], () => []), []);
-  // A list that is no longer wanted (its run was stopped) is not looked at further: the values of the batch that
-  // is under way are, no other, and what was not looked at is not handed out.
-  asked.length = 0;
-  let wanted = true;
-  const stopping = { ...counting, async holds(reference) { const held = await counting.holds(reference); wanted = false; return held; } };
-  const some = await heldItems(stopping, items, item => [item.reference, item.other], () => wanted);
-  assert.deepEqual([asked.length, some.map(item => item.index)], [8, [0, 1, 2, 3]], 'Eight values were looked at: those of the first four items.');
-  asked.length = 0;
-  assert.deepEqual([await heldItems(counting, items, item => [item.reference], () => false), asked], [[], []]);
-  // An index that is no longer wanted is not made: nothing is looked at, packed or written for it, also where
-  // the run is stopped while its values are looked at.
+  const counted = method => async reference => { asked.push(reference.sha256); most = Math.max(most, ++running); try { return await reopened[method](reference); } finally { running--; } };
+  const counting = { ...reopened, handed: counted('handed'), read: counted('read') };
+  const both = [...sources, ...diffs], without = both.filter(item => item.input.path !== '/src/anchor-5.ts');
+  const index = (await reopened.read(await observationIndex(counting, both))).trim().split('\n').map(row => JSON.parse(row));
+  assert.deepEqual(index.map(row => [row.tool, row.arguments.path]), without.map(item => [item.tool, item.input.path]), 'In their order, without the ones whose value is gone.');
+  assert.deepEqual([asked.length, new Set(asked).size, most], [20, 20, 8], 'Twenty values for forty observations, eight at a time.');
+  // The observations a planner's comments are checked against are read the same way, and one that cannot be read
+  // is left out.
+  asked.length = 0; running = 0; most = 0;
+  const anchored = await anchorObservations(counting, [...both, ...observations], sources.map((_, at) => ({ path: `/src/anchor-${at}.ts` })), 'c'.repeat(40));
+  assert.deepEqual([asked.length, new Set(asked).size, most], [20, 20, 8]);
+  assert.deepEqual(anchored.map(item => [item.tool, item.input.path, item.output === text(Number(/\d+/.exec(item.input.path)[0]))]), without.map(item => [item.tool, item.input.path, true]));
+  // Where the answers are no longer wanted (the run was stopped, a planning page has failed), no further value is
+  // looked at: those of the batch that is under way are, no other. An index that no page will use is neither
+  // packed nor written, also where the run is stopped while its rows are made.
   const objects = async () => (await readdir(join(reopened.directory, 'objects'))).length;
   const before = await objects();
-  wanted = true;
-  assert.deepEqual([await observationIndex(reopened, observations, () => false), await observationIndex(stopping, observations, () => wanted), await objects()], [undefined, undefined, before]);
-  // The observations a planner's comments are checked against are read the same way: each value once, however
-  // many observations name it, a few at a time, and one that cannot be read is left out.
-  const text = index => `source of file ${index}\n${'s'.repeat(400)}`;
-  const sources = await Promise.all(Array.from({ length: 12 }, (_, index) => captureObservation(reopened, 'azpr_read_file', { path: `/src/anchor-${index}.ts`, version: 'c'.repeat(40) }, text(index))));
-  const diffs = await Promise.all(sources.map((source, index) => captureObservation(reopened, 'azpr_read_diff', { path: `/src/anchor-${index}.ts`, version: 'c'.repeat(40) }, text(index))));
-  await rm(sources[5].outputRef.file);
-  await rm(sources[5].outputRef.pages);
-  running = 0; most = 0;
-  const reads = [];
-  const reading = { ...reopened, async read(reference) { reads.push(reference.sha256); most = Math.max(most, ++running); try { return await reopened.read(reference); } finally { running--; } } };
-  const anchored = await anchorObservations(reading, [...sources, ...diffs, ...observations], sources.map((_, index) => ({ path: `/src/anchor-${index}.ts` })), 'c'.repeat(40));
-  assert.deepEqual([reads.length, new Set(reads).size, most], [12, 12, 8], 'Twelve values for twenty-four observations, eight at a time.');
-  assert.deepEqual(anchored.map(item => [item.tool, item.input.path, item.output === text(Number(/\d+/.exec(item.input.path)[0]))]),
-    [...sources, ...diffs].filter(item => item.input.path !== '/src/anchor-5.ts').map(item => [item.tool, item.input.path, true]));
+  const stopping = { ...counting, async handed(reference) { const held = await counting.handed(reference); wanted = false; return held; }, async read(reference) { const value = await counting.read(reference); wanted = false; return value; } };
+  asked.length = 0;
+  assert.deepEqual([await observationIndex(stopping, both, () => wanted), asked.length], [undefined, 8]);
+  asked.length = 0; wanted = true;
+  assert.deepEqual([(await anchorObservations(stopping, both, sources.map((_, at) => ({ path: `/src/anchor-${at}.ts` })), 'c'.repeat(40), () => wanted)).length, asked.length], [14, 8], 'The first eight values, of which one is gone: seven files, read and as a diff.');
+  asked.length = 0; wanted = true;
+  assert.deepEqual([await observationIndex(counting, both, () => false), asked], [undefined, []]);
+  const large = { path: '/src/packed.ts', note: 'p'.repeat(3000) };
+  const packing = { ...reopened, async pack(value, size) { wanted = false; return reopened.pack(value, size); } };
+  assert.equal(await observationIndex(packing, [{ ...sources[0], input: large }], () => wanted), undefined, 'Stopped while a row\'s arguments were packed.');
+  assert.equal(await objects(), before + 3, 'No index was written; only the arguments that were being packed: an object and its pages, under both names.');
   // Within one run a value that the run has put is what that put made it: a second put of it is the first one's
   // reference and reads no file again, also for a value that is packed; a put that failed is tried again.
-  const whole = async (reference, expected) => assert.deepEqual([await readFile(reference.file, 'utf8'), (await rowsOf(reference)).map(row => JSON.parse(row).text).join('')], [expected, expected]);
+  const right = async (handed, expected) => assert.deepEqual([await readFile(handed.file, 'utf8'), await readFile(handed.pages, 'utf8')], [expected, writtenPages(expected)]);
   const run = putOnce(reopened), value = `put once in a run ${'r'.repeat(5000)}`;
+  assert.equal(putOnce(run), run, 'A run\'s store is that already.');
   const firstPut = await run.put(value);
-  await writeFile(firstPut.pages, 'not looked at again in this run\n');
+  await leave(firstPut.pages, 'not looked at again in this run\n');
   assert.deepEqual([await run.put(value), await readFile(firstPut.pages, 'utf8')], [firstPut, 'not looked at again in this run\n']);
   const packed = await run.pack({ list: value }, 100);
-  await writeFile(packed.azprData.pages, 'nor this\n');
+  await leave(packed.azprData.pages, 'nor this\n');
   assert.deepEqual([await run.pack({ list: value }, 100), await readFile(packed.azprData.pages, 'utf8')], [packed, 'nor this\n']);
   assert.deepEqual(await run.put(value, 'jsonl'), { ...firstPut, format: 'jsonl' }, 'Another format is another put.');
-  await whole(firstPut, value);
+  await right(firstPut, value);
   // Another run puts it anew, and so does the store itself.
-  await writeFile(firstPut.pages, 'damaged between two runs\n');
+  await leave(firstPut.pages, 'damaged between two runs\n');
   assert.deepEqual(await putOnce(reopened).put(value), firstPut);
-  await whole(firstPut, value);
+  await right(firstPut, value);
   let failing = true;
-  const flaky = putOnce({ ...reopened, put: (given, format) => failing ? Promise.reject(new Error('disk full')) : reopened.put(given, format) });
+  const flaky = putOnce({ ...reopened, put: (text, format) => failing ? Promise.reject(new Error('disk full')) : reopened.put(text, format) });
   await assert.rejects(flaky.put(value), /disk full/);
   failing = false;
   assert.deepEqual(await flaky.put(value), firstPut);

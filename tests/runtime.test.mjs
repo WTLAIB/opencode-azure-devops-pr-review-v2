@@ -5545,9 +5545,11 @@ test('a request is the turn\'s only on the word of the session\'s own messages: 
   const receipt = await f.command('pr-quick');
   assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete; verification none\n/);
   const [first, second] = (await stageRecords(receipt)).filter(record => record.role === 'azpr-quick-reviewer');
-  assert.deepEqual([first.sessionID, ...refused(first), first.attempt], [failed, 'FAILED', 0, 1, 1, 1]);
-  assert.deepEqual([...refused(second), second.attempt], ['COMPLETE', 1, 1, undefined, 2]);
-  assert.equal(f.sessions.get(failed).failure, '[AZPR] No reviewer turn is open in this session; a request the host starts by itself is not authorized.');
+  // The record says that the turn could not be read, which is not the same as a request that was none of a turn's.
+  const UNREAD = '[AZPR] The messages of this session could not be read, so its request cannot be taken for a reviewer turn\'s and is not authorized.';
+  assert.deepEqual([first.sessionID, ...refused(first), first.requestObservations.turnUnreadable, first.attempt], [failed, 'FAILED', 0, 1, undefined, 1, 1]);
+  assert.deepEqual([...refused(second), second.requestObservations.turnUnreadable, second.attempt], ['COMPLETE', 1, 1, undefined, undefined, 2]);
+  assert.equal(f.sessions.get(failed).failure, UNREAD);
   // The host had begun an execution by itself when the correction's prompt was admitted (the notice of a background
   // command woke the session): its request was built before the prompt became a message, and is not the turn's. It
   // is refused, and the turn's own request, which holds the prompt, goes through.
@@ -5592,7 +5594,7 @@ test('a request is the turn\'s only on the word of the session\'s own messages: 
     } });
   assert.match(await m.command('pr-quick'), /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete; verification none\n/);
   const NO_TOOL = '[AZPR] AZPR tools are available only to an active AZPR reviewer session.';
-  assert.deepEqual(midway.slice(0, 8), ['ran', true, '[AZPR] No reviewer turn is open in this session; a request the host starts by itself is not authorized.', NO_TOOL, false, 'ran', 'ran', true]);
+  assert.deepEqual(midway.slice(0, 8), ['ran', true, UNREAD, NO_TOOL, false, 'ran', 'ran', true]);
   assert.match(midway[8], /^\[AZPR\] /);
   assert.deepEqual(midway.slice(9), [NO_TOOL, false, 'ran', 'ran', true]);
   // The prompt is known among the session's messages by the nonce it was sent with, not by what the prompt hook
@@ -5672,11 +5674,11 @@ test('a message that asks the model to continue an interrupted answer is the hos
 test('a file that a reviewer reads in several windows is one observation, saved by the first of them', async t => {
   // AZPR's tool returns a window and keeps the whole file for comment planning. The file is the same in every
   // window: saving it again would read and check the stored value each time, for nothing.
-  const pages = async f => (await readdir(f.stateDirectory, { recursive: true })).filter(name => name.endsWith('.pages.jsonl')).map(name => join(f.stateDirectory, name));
+  const pages = async f => (await readdir(f.stateDirectory, { recursive: true })).filter(name => name.endsWith('.rows.jsonl')).map(name => join(f.stateDirectory, name));
   let saved, after, whole, together;
   const state = async () => [await pages(f), await Promise.all(saved.map(file => readFile(file, 'utf8')))];
-  // How often the text of a file is hashed for a put: once for each save that is begun, before the store makes
-  // one of two puts of a value that overlap.
+  // How often the text of a file is hashed for a put: twice for each save that is begun (by the run's record of
+  // what it has put, and by the store), before either makes one of two puts of a value.
   const OTHER = 'other\nsecond line\n', original = cryptoModule.createHash;
   let hashed = 0;
   const restore = () => { cryptoModule.createHash = original; syncBuiltinESMExports(); };
@@ -5706,7 +5708,7 @@ test('a file that a reviewer reads in several windows is one observation, saved 
     async answer(input) { if (input.role === 'azpr-quick-reviewer' && !input.turn) whole = await state(); } });
   const receipt = await f.command('pr-quick');
   assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete; verification none\n/);
-  assert.deepEqual(together, [['other', 'second line'], 1, 1], 'Each window returned its lines, and the file was saved by one put: its text was hashed once.');
+  assert.deepEqual(together, [['other', 'second line'], 1, 2], 'Each window returned its lines, and the file was saved by one put: its text was hashed for one.');
   assert.equal(saved.length, 1, 'The first window saved the file.');
   assert.deepEqual(after, [saved, ['not the pages\n'], false], 'The second window saved nothing again.');
   assert.deepEqual(whole, [saved, ['not the pages\n']], 'Nor did the read of the whole file after it.');

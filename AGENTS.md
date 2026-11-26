@@ -559,46 +559,56 @@ settings, backups and failure records. Never upload `.local/`.
   longer line and says so only inside the line (`HOST_READ_LINE_CHARACTERS` in
   `host.mjs`). Measure a row as it is written, after escaping (`pageRows` in
   `comment-data.mjs`), and never rely on the prompt to work around a cut row.
-  Saved references name the pages files, and a model reads them by itself,
-  so a value is ready only when its object is what its name says and its
-  pages give it whole through the host's read: rows the read returns uncut,
-  one after another, that together are the value, each row reading as it
-  parses (`wholePages`: a member that is there twice parses to the value
-  and reads otherwise). A value is made ready when it is put, from the text
-  in hand, at every put; and when a reference that a review saved is handed
-  to a model or read, from its files, each time (`holds`, `read`; a list of
-  them through `heldItems`, a few values at a time and each value once,
-  and the observations a planner's comments are checked against likewise):
-  an earlier version, or a process that was cut off, may have written them.
-  A list that its run no longer wants (the run was stopped, a planning page
-  failed) is not looked at further and not written.
+  A model reads the pages by itself, row by row, so the layout of a pages
+  file must never change under it. This version's pages are therefore a
+  file of their own name beside the value's object (`.rows.jsonl`), in one
+  layout for one text (`pagesOf`): a pages file is right exactly when it is
+  that, and whoever writes it writes the same. A file of the name that
+  versions before 0.5.1 gave their pages (`.pages.jsonl`, with rows the
+  host's read cuts) is never changed, since a process of such a version may
+  be reading it. Such a version hands that name out for every object it
+  finds when it opens a store, and writes no pages for them: so a value
+  that has no file of that name gets one, before its object is written,
+  these rows under that name too, as a link, which is there whole or not at
+  all (`settlePages`). A review that this version saved can then be planned
+  after going back to such a version. A version that changes the layout
+  gives its pages another name (a test holds the layout).
+  A value is ready when its object is what its name says and this version's
+  pages are there as it writes them. It is made ready when it is put, from
+  the text in hand, at every put; and when a reference that a review saved
+  is handed to a model, from its files, each time (`handed`, `holds`): an
+  earlier version, or a process that was cut off, may have written them.
+  The reference that is handed out names this version's pages, whatever the
+  saved one named; the one place that hands a saved review's references to
+  a model lists them so, a few values at a time and each value once
+  (`observationIndex`). The runtime's own reads need no pages (`read`, a few
+  at a time where a list is read: `anchorObservations`). A list that its run
+  no longer wants (the run was stopped, a planning page failed) is not
+  looked at further and not written.
   Between a put and the end of its run a value is what the put made it, and
   is not looked at again when a reference is handed on within the run (the
   retry of a stage, the continuation of a planning page), nor put again
-  where the run puts the same value once more (`putOnce` for the pages of a
-  planning). Nothing that writes those files meanwhile makes them wrong: an
-  earlier version never replaces a file that exists, and this version,
+  where the run puts the same value once more (`putOnce`, for a run's
+  payloads and for what its sessions' tools returned). Nothing that writes
+  those files meanwhile makes them wrong: an earlier version writes only
+  files of another name, and none where one is there, and this version,
   also in another process that works on the same saved review, replaces a
-  file in one step with what the digest-checked value gives, which is the
-  same. This process does not clean a run's data up before its command has
-  ended. Another process that shares the state directory can (it knows only
-  its own commands, a known limitation); the command whose data is gone
-  then fails, which no look before a reference is handed on would cure.
-  Pages that do not pass (rows of an earlier version, a file that is
-  missing, cannot be read or was not finished) are written again from the
-  value. Judge pages that are there by what the host's read returns, not by
-  the length this version writes. Keep no mark that says a store, or a
-  value of a saved review, is ready: an earlier version that still runs,
-  and another process, write into the same directory. An object is what its
-  name says by its bytes, not by the text they decode to, and a value is
-  the text a file can hold (no lone surrogate), so that object and pages
-  are one value. Derive pages only from such an object; where the object is
-  damaged or gone and its pages are complete, write the object again from
-  them. Replace a file in one step. A value that cannot be made ready is
-  not handed out, and the others are not held back for it: opening a store
-  looks at its directory alone and never fails for one value. A file that a
-  reviewer reads in several windows is one observation, known by its tool,
-  commit and path, and saved once.
+  file in one step with the same content.
+  This process does not clean a run's data up before its command has ended.
+  Another process that shares the state directory can (it knows only its own
+  commands, a known limitation); the command whose data is gone then fails,
+  which no look before a reference is handed on would cure.
+  Keep no mark that says a store, or a value of a saved review, is ready.
+  An object is what its name says by its bytes, not by the text they decode
+  to, and a value is the text a file can hold (no lone surrogate), so that
+  object and pages are one value. Derive pages only from such an object;
+  where the object is damaged or gone and pages are complete, of this
+  version or of an earlier one, write the object again from them. Replace a
+  file in one step. A value that cannot be made ready is not handed out,
+  and the others are not held back for it: opening a store looks at its
+  directory alone and never fails for one value. A file that a reviewer
+  reads in several windows is one observation, known by its tool, commit
+  and path, and saved once.
 - OpenCode lists every private session like a conversation. When a run ends,
   delete its sessions except the one holding the report or draft (a comment
   run keeps none; all stay while debugging or after an unconfirmed abort).

@@ -314,9 +314,12 @@ export function hostInstructions(messages) {
 // tools and hold no text.
 const updateText = message => message?.role !== 'system' || message.id !== undefined || message.metadata !== undefined || message.tools !== undefined ? undefined : oneText(message.content);
 
-// The text of a content that is one text part, which is what OpenCode makes of a message's text in a request;
-// nothing where the content is anything else (a string, several parts, a part of another kind).
-const oneText = content => Array.isArray(content) && content.length === 1 && content[0]?.type === 'text' && typeof content[0].text === 'string' ? content[0].text : undefined;
+// The text of a content that is one plain text part, `[{ type: 'text', text }]`, which is what OpenCode makes of
+// a message's text in a request; nothing where the content is anything else: a string, several parts, a part of
+// another kind, or a text part that carries something more (the mark of another hook, say), which is no longer
+// what the host built.
+const plainText = part => part?.type === 'text' && typeof part.text === 'string' && Object.keys(part).every(key => key === 'type' || key === 'text' || part[key] === undefined);
+const oneText = content => Array.isArray(content) && content.length === 1 && plainText(content[0]) ? content[0].text : undefined;
 
 /**
  * A request's messages without what OpenCode wrote into the session by itself: its loads of instruction files

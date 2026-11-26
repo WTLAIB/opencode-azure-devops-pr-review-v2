@@ -18,7 +18,7 @@ import { createReviewSession, requestReview, interruptSession, appendReport, cla
 import { COMMANDS, COMMAND_NAMES, MODES, ROLES, PROMPTS, PLUGIN_ID, PACKAGE_NAME, REPOSITORY, roleFor, privateAgent, commentRole, allowedTools, buildAgents, validateSettings, withMissingSettings, settingsText, modelRef, stageModel, firstModel, modeReady, raterState, patProblem } from './config.mjs';
 import { parseUniqueJSON, parseReviewRequest, parseCommentRequest, visibleText } from './output.mjs';
 import { createDiagnostics, diagnosticResponse, diagnosticToolError, createStageTiming, collectToolObservations } from './diagnostics.mjs';
-import { createCommentData, captureObservation, PAGE_CHARACTERS, COMMENT_TURN_CHARACTERS } from './comment-data.mjs';
+import { createCommentData, captureObservation, putOnce, PAGE_CHARACTERS, COMMENT_TURN_CHARACTERS } from './comment-data.mjs';
 import { prepareComments, publishPlan, discussionDigest, PLANNING_PARALLEL_PAGES } from './comment-work.mjs';
 import { automaticPublicationProblems, automaticPublicationRepeats, publicationItems, publishableFindings, reviewMethod,
   everAdjusted, hasAdjustments, resolveAdjustments, everyFindingExcluded, publicationStarted, describeAdjustments, describeEarlierText, excludedReferences, previewNextSteps, previewActions, commentToken } from './comments.mjs';
@@ -424,8 +424,19 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   }
 
   // ---------------------------------------------------------- data & state
+  /**
+   * The private data of a run: its review's store as this run uses it. The store is one for a review in this
+   * process, also across its runs; what one run puts it puts once (`putOnce`), in its payloads and for what its
+   * sessions' tools returned alike, and another run puts anew.
+   */
   async function dataFor(run) {
-    const owner = run.review ?? run;
+    if (!run.puts) {
+      const puts = run.puts = storeOf(run.review ?? run).then(putOnce);
+      puts.catch(() => { if (run.puts === puts) run.puts = undefined; });
+    }
+    return run.puts;
+  }
+  function storeOf(owner) {
     if (owner.data) return owner.data;
     const directory = owner.dataDirectory;
     const pending = directory && openStores.has(directory) ? openStores.get(directory)
@@ -884,7 +895,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // and a request is the turn's only while the turn's prompt is among them, known by that nonce, and no
       // idle marker follows it (see the `context` hook). The end of the wait closes the grant in any case. `checked` is the turn of which a request was looked at so and found to be the turn's, and
       // `validated` the prompt of the last turn whose answer was taken.
-      open: false, turn: null, checked: null, validated: undefined, turnChecks: 0, refusedOutsideTurn: 0,
+      open: false, turn: null, checked: null, validated: undefined, turnChecks: 0, refusedOutsideTurn: 0, turnUnreadable: 0,
       referenceSnapshot: run.snapshot ?? run.review?.snapshot,
       requestKinds: { primary: 0, compaction: 0, generate: 0, title: 0, unknown: 0 }, rejectedRequests: 0, retryEvents: [],
       // What the context hook kept from this session's model: the instruction sources of the conversation's place
@@ -1033,7 +1044,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         ...(g.hiddenLoads.size ? { instructionLoads: g.hiddenLoads.size } : {}), ...(g.hiddenUpdates.size ? { instructionUpdates: g.hiddenUpdates.size } : {}),
         // How often the session's messages were read before a request (once for every request of an open
         // turn), and how many requests were refused because they were not a turn's.
-        ...(g.turnChecks ? { turnChecks: g.turnChecks } : {}), ...(g.refusedOutsideTurn ? { refusedOutsideTurn: g.refusedOutsideTurn } : {}) };
+        ...(g.turnChecks ? { turnChecks: g.turnChecks } : {}), ...(g.refusedOutsideTurn ? { refusedOutsideTurn: g.refusedOutsideTurn } : {}),
+        ...(g.turnUnreadable ? { turnUnreadable: g.turnUnreadable } : {}) };
       record.endedAt = new Date().toISOString();
       record.durationMs = Date.parse(record.endedAt) - Date.parse(record.startedAt);
       record.remainingRunMsAtEnd = remainingRunMs(run);
@@ -2086,6 +2098,12 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       if (state !== 'running' || grants.get(event.sessionID) !== g || !g.open || g.turn !== turn) {
         // Past its marker the turn is over; before its prompt is a message, the turn's own request is still to come.
         if (state === 'ended' && grants.get(event.sessionID) === g && g.turn === turn) close(g);
+        // Where the session's messages could not be read, nothing is known of the turn: the request is refused
+        // all the same, and said to be refused for that, not for being none of a turn's.
+        if (g.open && turn !== null && !stored) {
+          g.turnUnreadable++;
+          throw new Error('[AZPR] The messages of this session could not be read, so its request cannot be taken for a reviewer turn\'s and is not authorized.');
+        }
         g.refusedOutsideTurn++;
         throw new Error('[AZPR] No reviewer turn is open in this session; a request the host starts by itself is not authorized.');
       }

@@ -98,10 +98,13 @@ Large inputs:
   is handed to a model as a reference to pages, which it reads with OpenCode's
   native read. That tool cuts every line after 2,000 characters, and a row
   held up to 3,000 characters of text, so a model got about two thirds of
-  what it read. Rows now fit, and pages of a saved review that do not are
-  written again when their value is used. A value whose files cannot be made
-  right is not handed to a model. The instructions to the models did not
-  change.
+  what it read. Rows now fit. They are a file of this version's own beside
+  the value; a review that an earlier version saved gets such pages when its
+  values are used, and what that version wrote is left as it is. A value
+  that this version saves has the same rows under the earlier name as well,
+  so that its review can still be commented on after going back to 0.5.0.
+  A value whose files cannot be made right is not handed to a model. The
+  instructions to the models did not change.
 
 Receipts:
 

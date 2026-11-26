@@ -61,7 +61,7 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   private data hold rows short enough for OpenCode's native read, which cut
   every row after 2,000 characters, so a model that read a large value in
   pages got about two thirds of it. Pages of a saved review that do not fit
-  are written again whenever it is used.
+  are written in the new form, beside the old ones, whenever it is used.
 - **Stages in one order (0.5.1).** A review's receipt lists the stages by
   their place in the pipeline, and the report is in the last one that did
   not fail, whichever session OpenCode created first.

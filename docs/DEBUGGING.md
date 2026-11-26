@@ -194,21 +194,26 @@ first pass, `-reviewerb`, `-reviewerc` and `-reviewerd` for the next ones,
    requests: those in which OpenCode loaded instruction files beside a file
    the session read (one message can hold several files) and those in which
    it wrote an update, and `placeInstructionsNotToldApart` counts the
-   requests that went out as they were because their parts did not have the
+   requests in which, when they were prepared, the parts did not have the
    form AZPR knows, or a message that still had a loaded file's ID was not
    that file as OpenCode builds it (a newer OpenCode, or another plugin that
-   edited them). A loaded file that another plugin moved elsewhere, or gave
-   another ID, is not seen at all, so a counter of zero does not say that
-   no such text went out. `shellNotices` on the stage
-   counts the notices of this session's background commands that were seen
-   when an answer was taken: those in the turn, and one that arrived after
-   the turn's end and woke the session before the answer was looked at. A
-   turn that failed after such a notice does not add to it. `turnChecks` counts how
-   often the session's messages were read, once before every request of an
-   open turn; and `refusedOutsideTurn` the requests that were refused
-   because they were not a turn's (the notice of a background command woke
-   the session after its answer, or before its next prompt became a
-   message).
+   edited them); AZPR left those as they were. That counter is of what was
+   seen while a request was prepared, not of what went out: a request that
+   is counted can still be refused when it is sent, and a loaded file that
+   another plugin moved elsewhere, or gave another ID, is not seen at all,
+   so a counter of zero does not say that no such text went out.
+   `shellNotices` on the stage counts the distinct notices of this session's
+   background commands in what was looked at for the answers that were
+   taken: those in a turn, one that arrived between two turns, and one that
+   arrived after a turn's end and woke the session before its answer was
+   looked at. A turn that failed after such a notice does not add to it.
+   `turnChecks` counts how often the session's messages were read, once
+   before every request of an open turn; `refusedOutsideTurn` the requests
+   that were refused because they were not a turn's (the notice of a
+   background command woke the session after its answer, or before its next
+   prompt became a message); and `turnUnreadable` those that were refused
+   because the session's messages could not be read, so that nothing was
+   known of the turn.
 2. The failed stage's request, response(s) and result together. `repairs` lists
    what the runtime asked the model to correct; `unresolvedIssues` lists what
    was still wrong after the last turn and therefore downgraded per item. For a

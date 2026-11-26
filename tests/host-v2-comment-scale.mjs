@@ -194,7 +194,7 @@ try {
     assert.deepEqual(JSON.parse(value), files, 'The private value is the list of the PR\'s changed files.');
     assert.deepEqual([rows[0].start, rows[1].start, rows[1].end < value.length], [0, rows[0].end, true], 'The two rows follow each other from the start of the value, which goes on after them.');
     assert.equal(rows[0].text + rows[1].text, value.slice(0, rows[1].end), 'The rows hold the value\'s own text, nothing lost.');
-    // The length that decides whether a row an earlier version wrote can stay (`wholePages`): the host returns a
+    // The length that a row of AZPR's pages is kept under (`ROW_CHARACTERS` is a hundred less): the host returns a
     // line of exactly that many characters whole, and cuts one that is a character longer, saying so in the line.
     const [whole, cut] = rowsRead.limit.split('\n').filter(line => /^\d+: /.test(line)).map(line => line.replace(/^\d+: /, ''));
     assert.equal(whole, 'a'.repeat(HOST_READ_LINE_CHARACTERS), `The host's read no longer returns a line of ${HOST_READ_LINE_CHARACTERS} characters whole (it returned ${whole?.length}): ${rowsRead.limit.slice(0, 200)}`);

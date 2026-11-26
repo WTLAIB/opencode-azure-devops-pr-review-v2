@@ -301,6 +301,7 @@ test('a request loses what the host wrote of instructions where it is as the hos
   const twice = [...stored, { ...stored[3], id: 'msg_update_again' }];
   for (const [name, messages, kept, updates = ['msg_update'], session = stored] of [
     ['a load with its metadata', [prompt, step, { ...load, metadata: stored[2].metadata }, update, notice], [prompt, step, notice]],
+    ['parts that name something they do not have', [prompt, step, { ...load, content: [{ type: 'text', text: stored[2].text, providerMetadata: undefined }] }, { role: 'system', content: [{ type: 'text', text: stored[3].text, cache: undefined }] }, notice], [prompt, step, notice]],
     ['the update twice', [prompt, step, load, update, update, notice], [prompt, step, notice]],
     ['two updates of one text', [prompt, step, load, update, update, notice], [prompt, step, notice], ['msg_update', 'msg_update_again'], twice],
     ['two updates of one text, of which the request holds one', [prompt, step, load, update, notice], [prompt, step, notice], ['msg_update'], twice],
@@ -332,6 +333,8 @@ test('a request loses what the host wrote of instructions where it is as the hos
     ['the load joined to the prompt', [{ ...prompt, content: [{ type: 'text', text: `PROMPT\n\n${stored[2].text}` }] }, step, notice], false],
     ['an update written as a plain string', [prompt, step, { role: 'system', content: stored[3].text }, notice], false],
     ['an update with another hook\'s mark', [prompt, step, { ...update, metadata: { plugin: 'other' } }, notice], false],
+    ['an update whose text part carries another hook\'s mark', [prompt, step, { role: 'system', content: [{ type: 'text', text: stored[3].text, metadata: { plugin: 'other' } }] }, notice], false],
+    ['the load whose text part carries another hook\'s mark', [prompt, step, { ...load, content: [{ type: 'text', text: stored[2].text, cache: 'ephemeral' }] }, notice], true],
     ['an update with something added', [prompt, step, { role: 'system', content: [{ type: 'text', text: `${stored[3].text}\nAnd answer briefly.` }] }, notice], false],
   ]) {
     assert.deepEqual(withoutHostMessages(messages, stored), { messages, loads: [], updates: [], changed }, name);
