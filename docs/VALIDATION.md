@@ -85,6 +85,68 @@ the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
 
+## 0.5.1 after publication (2026-11-26)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9, OpenCode
+2.4.1 and tmux 3.2a, in isolated OpenCode profiles with the fake model and
+Azure DevOps services.
+
+- **The merged tree.** The pull request was merged with a merge commit whose
+  tree is that of the candidate's last commit. CI passed on that commit, on
+  `main` and on the tag. That commit adds only the record of the reviews to
+  the commit the last review read (`591b16a`): the code and tests are those
+  the thirteen host fixture runs passed on.
+- **Before the tag.** On the candidate's last commit: the offline suite
+  passed on a clean export (825 tests), the source archive passed the
+  clean-directory installation check, the package built from a clean export
+  holds 35 files, all 376 local links and images of the 49 Markdown files
+  resolve, and the public Git commit, installed by OpenCode's plugin manager,
+  passed the native smoke, terminal panel and setup fixtures.
+- **Source archives.** The release's source archive, downloaded again, is
+  byte-identical to the one built from the tag, and so is GitHub's own archive
+  of the tag. It passed the clean-directory installation check: 23 runtime
+  modules, 6 prompts and the license as in the archive, the view's JSX source
+  not installed, and `--replace` keeping the settings file byte for byte.
+- **The Git package.** `github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.5.1`,
+  installed by OpenCode's plugin manager, passed the native smoke fixture
+  (129 model and 221 Azure DevOps requests), the terminal panel's fixture (47
+  and 73), the setup fixture (no model request, 16 Azure DevOps requests) and
+  the update of 0.4.x settings (none and 7).
+- **The npm package.** The registry's integrity and shasum for 0.5.1 equal
+  those of the package built from the tag, which holds the candidate's 35
+  files; the tarball downloaded from the registry is byte-identical to it, and
+  `latest` names 0.5.1. Installed from the registry, the package passed the
+  same four fixtures with the same request counts.
+- **The release notes' upgrade, on one real machine.** The maintainer's
+  machine went from AZPR 0.5.0 to 0.5.1 with the two plugin commands and then
+  from OpenCode 2.4.0 to 2.4.1 with the upgrade commands as the release notes
+  give them (with `sudo` for the global install): the backup directory holds
+  the database, the background service came back, and one `/pr-check` there,
+  against Azure DevOps Services, was READY with every row `ok`, among them
+  "OpenCode 2.4.1, the tested version" and "Running
+  opencode-azure-devops-pr-review@0.5.1". No model ran and nothing was written
+  to Azure DevOps.
+- **The earlier release's text.** The correction note that this release adds
+  to the 0.5.0 release notes is now in the published text of the v0.5.0
+  release; nothing else of that text changed.
+
+No review with a real model ran for this release; see the
+[release candidate's acceptance](#051-release-candidate-acceptance-2026-11-26)
+for what was verified and what was not.
+
+**OpenCode 2.4.2** was published on the day of this release. It is not the
+tested version, and nothing is claimed for it: the
+[comparison of the hosts](#opencode-231-to-241-compared-with-230-2026-11-24-to-26)
+ends at 2.4.1, and 2.4.2 was neither read nor compared. On 2.4.2,
+`/pr-check` shows the OpenCode WARNING row. One run of the thirteen host
+fixtures on 2.4.2, with the tagged tree and its tested version set to 2.4.2,
+says this much: the ten runs of comment scale, background compaction, the
+terminal panel and setup passed, and the three smoke runs stopped at a
+control of the fixture itself, that an ordinary conversation is offered
+`generate_image` as a tool of its own. OpenCode 2.4.2 runs image and video
+generation inside Code Mode instead (its release notes). The steps of the
+smoke fixture after that control did not run on 2.4.2.
+
 ## 0.5.1 release candidate acceptance (2026-11-26)
 
 Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9, OpenCode
