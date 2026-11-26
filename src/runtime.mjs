@@ -15,7 +15,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, X509Certificate } from 'node:crypto';
 import { createReviewSession, requestReview, interruptSession, appendReport, classifyFailure } from './session.mjs';
-import { COMMANDS, COMMAND_NAMES, MODES, ROLES, PROMPTS, PLUGIN_ID, PACKAGE_NAME, REPOSITORY, roleFor, privateAgent, commentRole, allowedTools, buildAgents, validateSettings, withMissingSettings, settingsText, modelRef, stageModel, firstModel, modeReady, raterState, patProblem } from './config.mjs';
+import { COMMANDS, MODES, ROLES, PROMPTS, PLUGIN_ID, PACKAGE_NAME, REPOSITORY, strayCommand, strayNotice, strayRefusal, roleFor, privateAgent, commentRole, allowedTools, buildAgents, validateSettings, withMissingSettings, settingsText, modelRef, stageModel, firstModel, modeReady, raterState, patProblem } from './config.mjs';
 import { parseUniqueJSON, parseReviewRequest, parseCommentRequest, visibleText } from './output.mjs';
 import { createDiagnostics, diagnosticResponse, diagnosticToolError, createStageTiming, collectToolObservations } from './diagnostics.mjs';
 import { createCommentData, captureObservation, putOnce, PAGE_CHARACTERS, COMMENT_TURN_CHARACTERS } from './comment-data.mjs';
@@ -2055,16 +2055,13 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         throw new Error('[AZPR] Private reviewers cannot be mentioned or delegated.');
       }
       if (!seenSessions.has(event.sessionID) && !createdEarlier.has(event.sessionID)) {
-        // One of AZPR's commands that a client sent as an ordinary prompt: OpenCode's terminal UI does so when the
-        // text is submitted before it has loaded the commands (`opencode --prompt "/pr-review …"`; with 2.4.0 and
-        // 2.4.1 nearly always, and then often to the built-in free model). No command ran, and a model would
-        // receive the PR URL and the context as text: stop it here and say so in the conversation.
-        // A command begins the text, as OpenCode's own prompt box requires of one: an indented example, or a
-        // command after a blank line, is what a person wrote about a command.
-        const stray = typeof event.prompt?.text === 'string' ? /^\/(pr-[a-z]+)(?=\s|$)/.exec(event.prompt.text)?.[1] : undefined;
-        if (stray && COMMAND_NAMES.includes(stray)) {
-          await deliver(event.sessionID, `[AZPR] /${stray} reached OpenCode as an ordinary prompt, not as a command, so AZPR stopped it: nothing ran and no model received it. That happens when it is sent before OpenCode has loaded its commands (opencode --prompt at startup, for example). Type /${stray} again once it shows in the slash-command list.`);
-          throw new Error(`[AZPR] /${stray} was sent as an ordinary prompt, not as a command; it was not passed to a model.`);
+        // One of AZPR's commands that a client sent as an ordinary prompt (`strayCommand`): no command ran, and
+        // a model would receive the PR URL and the context as text. Stop it here and say so in the conversation.
+        // A process that has no runtime yet refuses it by the same rule (`setup.mjs`).
+        const stray = strayCommand(event.prompt?.text);
+        if (stray) {
+          await deliver(event.sessionID, strayNotice(stray));
+          throw new Error(strayRefusal(stray));
         }
         return;
       }
@@ -2092,7 +2089,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     const prepare = async event => {
       if (!privateSession(event)) {
         // AZPR's PAT-backed tools exist only for its private reviewers.
-        withoutTools(requestSlots(event).tools.value, name => REVIEW_TOOL_NAMES.includes(name));
+        withoutTools(requestSlots(event).tools.value, REVIEW_TOOL_NAMES);
         return;
       }
       // Whose request this is, read once, as the host reads it.
@@ -2217,7 +2214,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     // is a failure like any other hook's.
     for (const name of ['compaction', 'generate']) {
       registrations.push(await context.session.hook(name, async event => {
-        withoutTools(requestSlots(event).tools.value, tool => REVIEW_TOOL_NAMES.includes(tool));
+        withoutTools(requestSlots(event).tools.value, REVIEW_TOOL_NAMES);
       }));
     }
     registrations.push(await context.session.hook('model.request', async event => {

@@ -12,7 +12,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
-import { COMMANDS, MODES, REPOSITORY, SETTING_CHECKS, MAX_REVIEWERS, MIGRATION_NEEDED, isModelReference, migrateSettings, modelRef, patProblem, privateAgent, settingsText, validateSettings, withMissingSettings } from './config.mjs';
+import { COMMANDS, MODES, REPOSITORY, SETTING_CHECKS, MAX_REVIEWERS, MIGRATION_NEEDED, isModelReference, migrateSettings, modelRef, patProblem, privateAgent, settingsText, strayCommand, strayNotice, strayRefusal, validateSettings, withMissingSettings } from './config.mjs';
 import { parseUniqueJSON } from './output.mjs';
 import { appendReport } from './session.mjs';
 import { fetchTransportSupported, listOf, recordOf, requireMethods } from './host.mjs';
@@ -29,6 +29,8 @@ const USAGE = '/pr-setup --organization ORG --model PROVIDER/MODEL [--pat-file "
 const CHECK_TIMEOUT_MS = 20000;
 // How long a first setup waits for OpenCode to drop the commands that only said that AZPR is not ready.
 const RELEASE_WAIT_MS = 3000;
+// How long the refusal of a command that arrived as a prompt waits for its notice to be left in the conversation.
+const NOTICE_WAIT_MS = 10000;
 // The commands of a process without usable settings: each only says that AZPR cannot run here yet. The words are
 // true of every reason: no settings, settings that cannot be used, settings of 0.4.x that wait for their update,
 // and settings that were saved elsewhere since (by a setup in another project directory, say) and wait for a
@@ -1128,9 +1130,12 @@ function createSetupService({ context, path, environment, options, loaded, saved
   };
 }
 
-/** Missing/invalid settings expose only setup and blocked command explanations, with the reason. */
+/**
+ * Missing/invalid settings expose only setup and blocked command explanations, with the reason, and refuse one
+ * of AZPR's commands that arrives as an ordinary prompt, as the runtime does once it is loaded.
+ */
 export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, testOptions = {}) {
-  const { environment = process.env, settingsWaitMs, checkTimeoutMs, releaseWaitMs = RELEASE_WAIT_MS, settingsPrepared, ...runtimeOptions } = testOptions;
+  const { environment = process.env, settingsWaitMs, checkTimeoutMs, releaseWaitMs = RELEASE_WAIT_MS, noticeWaitMs = NOTICE_WAIT_MS, settingsPrepared, ...runtimeOptions } = testOptions;
   const path = await settingsFileFor(context.options ?? {}, sourceDirectory, environment);
   const first = await settingsProblem(path);
   if (first.disabled) return async () => {};
@@ -1368,6 +1373,18 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
   });
   registrations.push(registration);
   try {
+    // One of AZPR's commands that a client sent as an ordinary prompt is stopped here while this process has no
+    // runtime, whose own hook does it afterwards (`strayCommand`): before a first setup, with settings that
+    // cannot be used, and while settings of 0.4.x wait for their update, a model would be sent the PR URL and
+    // the context all the same. The rule needs no settings. The refusal does not wait for the notice for long,
+    // and holds where the notice could not be left.
+    if (use.blocked && typeof context.session?.hook === 'function') registrations.push(await context.session.hook('prompt', async event => {
+      const stray = use.blocked ? strayCommand(event?.prompt?.text) : undefined;
+      if (!stray) return;
+      const waiting = new AbortController(), timer = setTimeout(() => waiting.abort(new Error('Timed out.')), noticeWaitMs);
+      await appendReport(context, { sessionID: event.sessionID, text: strayNotice(stray), signal: waiting.signal }).catch(() => {}).finally(() => clearTimeout(timer));
+      throw new Error(strayRefusal(stray));
+    }));
     // The terminal UI's dialogs reach setup through the plugin's RPC; a host without it keeps the options.
     if (typeof context.rpc?.register === 'function') registrations.push(rpc = await context.rpc.register(SETUP_RPC, service));
     // A plugin may have taken a review command's name since the catalog was read above: that name stays its own.

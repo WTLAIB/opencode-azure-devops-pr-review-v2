@@ -49,7 +49,9 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   OpenCode collects for the conversation's directory (instruction files, what
   MCP servers, references and skills say of themselves) stays out of it, and
   so do the instruction files OpenCode loads when a reviewer's native read
-  reads a file beside one, which used to fail the pass.
+  reads a file beside one, which used to fail the pass. With a `claude-agent`
+  model this holds for what OpenCode hands the Claude Code program; what that
+  program reads by itself was not tried.
 - **OpenCode 2.4.1 as the tested host (0.5.1).** With what 2.3.1 to 2.4.1
   changed for AZPR: a release the terminal UI makes up late, for a button
   whose own release was lost, no longer picks a step (one it makes up within

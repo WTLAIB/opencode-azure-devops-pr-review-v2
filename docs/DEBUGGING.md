@@ -31,10 +31,13 @@ and the conversation is told:
 
 The terminal UI then shows `Failed to set up session` and may try again in a
 new conversation, which leaves a few empty conversations behind; a retry that
-finds the commands loaded runs the command. AZPR can only stop a prompt where
-its runtime is loaded: not before OpenCode has loaded the plugin, and not in
-a process whose settings cannot be used yet, which has AZPR's placeholder
-commands and no hook.
+finds the commands loaded runs the command. AZPR stops such a prompt before
+a first setup as well, and while its settings cannot be used or settings of
+0.4.x wait for their update; a retry that finds the commands loaded then gets
+the command's own answer, which says what AZPR still needs. It cannot stop a
+prompt where OpenCode has not loaded the plugin (not yet, or because loading
+it failed, which OpenCode reports), and it stops none while it is switched
+off (`enabled: false`).
 
 Do not start AZPR's commands with `--prompt`. Start the TUI and wait for
 `/pr-review` to appear in slash-command completion before submitting it; a

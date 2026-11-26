@@ -264,20 +264,23 @@ export function withoutPlaceInstructions(system, keep = HOST_FACT_SOURCES) {
 }
 
 /**
- * Takes out of a request's list of tools those that `unwanted` names (a tool's name is given to it), where the
- * list is an ordinary object and lets a tool be taken out. A list that answers for another object is not asked
- * what it holds, and a tool that cannot be taken out stays listed: whether a tool may run is decided where it
- * is called, not by what a request lists, so nothing is refused or thrown for either. Says whether no such tool
- * is left listed, as far as that can be known (not of a list that answers for another object).
+ * Takes out of a request's list of tools those that `unwanted` names, where the list is an ordinary object and
+ * lets a tool be taken out. `unwanted` is a rule, which is asked of every name the list lists, or a list of
+ * names, of which only those are looked up: an ordinary conversation's request loses a few names of a list that
+ * can be long. A list that answers for another object is not asked what it holds, and a tool that cannot be
+ * taken out stays listed: whether a tool may run is decided where it is called, not by what a request lists, so
+ * nothing is refused or thrown for either. Says whether no such tool is left listed, as far as that can be
+ * known (not of a list that answers for another object).
  */
 export function withoutTools(tools, unwanted) {
   if (tools === undefined || tools === null) return true;
   if (!ordinary(tools)) return false;
+  const named = Array.isArray(unwanted);
   let gone = true;
   // A tool is what the list lists under a name: a property that is not listed (something a hook keeps there for
   // itself) or stands under a symbol is no tool, and is left where it is.
-  for (const name of Reflect.ownKeys(tools)) {
-    if (typeof name !== 'string' || !Reflect.getOwnPropertyDescriptor(tools, name)?.enumerable || !unwanted(name)) continue;
+  for (const name of named ? unwanted : Reflect.ownKeys(tools)) {
+    if (typeof name !== 'string' || !Reflect.getOwnPropertyDescriptor(tools, name)?.enumerable || !(named || unwanted(name))) continue;
     if (!Reflect.deleteProperty(tools, name)) gone = false;
   }
   return gone;

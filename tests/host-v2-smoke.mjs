@@ -37,7 +37,8 @@ import { TESTED_HOST_VERSION } from '../src/host.mjs';
  * next to a local file that a reviewer reads with the native read tool, which
  * OpenCode leaves in the session by itself, ends no turn and reaches no model;
  * and one of AZPR's commands that arrives as an ordinary prompt is stopped
- * before any model gets it. Automatic comment
+ * before any model gets it (with --native also before the first setup, when
+ * AZPR has no settings yet). Automatic comment
  * steps: a flag after the PR URL previews the comments of a COMPLETE review in
  * a run of its own, automatic publication posts a quick review's
  * finding and holds back only a comment with an image until a
@@ -434,6 +435,22 @@ try {
     };
     assert.deepEqual(await privateRoles(), []);
     assert.match(await invoke('pr-check', 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/123'), /SETUP REQUIRED/);
+    // Before a first setup the review commands only say that AZPR is not ready, and one that reaches OpenCode
+    // as an ordinary prompt (the terminal UI submitted it before it had loaded the commands) would give a model
+    // the PR URL and the context all the same: AZPR refuses it without settings too, and says so there.
+    const early = (await rawApi('/api/session', { title: 'Command sent as a prompt before setup', location: { directory: directories.work } })).data.id;
+    const earlyPrompt = await fetch(`${url}/api/session/${early}/prompt`, { method: 'POST', headers: { authorization: auth, 'content-type': 'application/json', 'x-opencode-directory': directories.work },
+      body: JSON.stringify({ text: `/pr-check https://dev.azure.com/fixture/project/_git/repository/pullrequest/123 ${MARKS.stray}` }), signal: AbortSignal.timeout(60000) });
+    const earlyText = await earlyPrompt.text();
+    assert.equal(earlyPrompt.ok, false, `OpenCode did not refuse the prompt before a first setup: ${earlyPrompt.status} ${earlyText}`);
+    await rawApi(`/api/experimental/session/${early}/wait`, {});
+    const earlyNotices = (await rawApi(`/api/session/${early}/inbox`)).data.map(item => item.payload?.text ?? '');
+    assert.ok(earlyNotices.length === 1 && earlyNotices[0].startsWith('[AZPR] /pr-check reached OpenCode as an ordinary prompt, not as a command, so AZPR stopped it: nothing ran and no model received it.'), JSON.stringify(earlyNotices));
+    const earlyContext = await rawApi(`/api/session/${early}/context`);
+    const earlyMessages = Array.isArray(earlyContext) ? earlyContext : earlyContext?.data;
+    assert.ok(Array.isArray(earlyMessages), `The conversation's messages were not answered as a list: ${JSON.stringify(earlyContext).slice(0, 200)}`);
+    assert.deepEqual(earlyMessages.filter(message => message.type === 'user').map(message => message.text), [], 'The refused prompt is no message of the conversation.');
+    assert.equal(requests.length, 0, 'No model was asked before a first setup, not even for a title.');
     assert.match(await invoke('pr-setup', '--help'), /--organization[\s\S]*--model[\s\S]*--pat-file/);
     // Without --pat-file, setup uses the default PAT file under XDG_CONFIG_HOME; --organization also takes a PR URL.
     const patFile = join(fixture, 'xdg-config', 'azpr', 'pat');
@@ -530,7 +547,7 @@ try {
     await writeFile(join(directories.config, 'opencode.json'), JSON.stringify(config, null, 2));
     url = await startHost();
     await waitForCommands();
-    nativeSetup = `${publishedPackage ? `CLI plugin add ${publishedPackage}` : 'npm pack plus CLI plugin add from an isolated Git commit'}; missing config blocks reviews; setup validates model and private PAT file without network calls and is loaded without a restart, uses the default XDG PAT file and takes the organization from a PR URL; it writes the model as two review passes and one quick pass, and a review with exactly those settings completes (identical findings of the two passes removed by the runtime, rating by the same model, the default preview after it); default XDG and explicit options.settingsFile both work; external mode-600 settings survive restart; installed package holds no settings or PAT`;
+    nativeSetup = `${publishedPackage ? `CLI plugin add ${publishedPackage}` : 'npm pack plus CLI plugin add from an isolated Git commit'}; missing config blocks reviews, and a command sent as an ordinary prompt is refused before setup too; setup validates model and private PAT file without network calls and is loaded without a restart, uses the default XDG PAT file and takes the organization from a PR URL; it writes the model as two review passes and one quick pass, and a review with exactly those settings completes (identical findings of the two passes removed by the runtime, rating by the same model, the default preview after it); default XDG and explicit options.settingsFile both work; external mode-600 settings survive restart; installed package holds no settings or PAT`;
   }
   const waitForMcp = async () => {
     for (let attempt = 0; attempt < 100; attempt++) {

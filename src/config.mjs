@@ -7,6 +7,20 @@ export const COMMANDS = Object.freeze({ 'pr-check': 'check', 'pr-review': 'revie
 // Every slash command AZPR has, whichever part registers it: the runtime's, `/pr-setup` (`setup.mjs`) and the
 // terminal part's `/pr-panel` (`tui-view.jsx`). A prompt that begins with one of them was meant as that command.
 export const COMMAND_NAMES = Object.freeze([...Object.keys(COMMANDS), 'pr-setup', 'pr-panel']);
+/**
+ * One of AZPR's commands that a client sent as an ordinary prompt, by its name. OpenCode's terminal UI does so
+ * when the text is submitted before it has loaded the commands (`opencode --prompt "/pr-review …"`; with 2.4.0
+ * and 2.4.1 nearly always, and then often to the built-in free model): no command ran, and a model would
+ * receive the PR URL and the context as text. A command begins the text, as OpenCode's own prompt box requires
+ * of one: an indented example, or a command after a blank line, is what a person wrote about a command.
+ */
+export function strayCommand(text) {
+  const name = typeof text === 'string' ? /^\/(pr-[a-z]+)(?=\s|$)/.exec(text)?.[1] : undefined;
+  return name !== undefined && COMMAND_NAMES.includes(name) ? name : undefined;
+}
+/** What the conversation is told of such a prompt, and what the refusal itself says. */
+export const strayNotice = name => `[AZPR] /${name} reached OpenCode as an ordinary prompt, not as a command, so AZPR stopped it: nothing ran and no model received it. That happens when it is sent before OpenCode has loaded its commands (opencode --prompt at startup, for example). Type /${name} again once it shows in the slash-command list.`;
+export const strayRefusal = name => `[AZPR] /${name} was sent as an ordinary prompt, not as a command; it was not passed to a model.`;
 
 // How the host identifies this plugin and its published packages in its plugin list.
 export const PLUGIN_ID = 'azpr';

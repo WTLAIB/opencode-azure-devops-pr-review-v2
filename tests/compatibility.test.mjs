@@ -325,6 +325,14 @@ test('a tool is taken out of a request\'s list where the list is an ordinary obj
   revoked.revoke();
   assert.deepEqual([watched, revoked.proxy, 'tools', 7].map(other => withoutTools(other, unwanted)), [false, false, false, false], 'Of a list that is not looked into nothing is known.');
   assert.deepEqual([withoutTools(undefined, unwanted), withoutTools(null, unwanted)], [true, true], 'No list holds no tool.');
+  // Names instead of a rule: only those are looked up in the list, each by the same rule. (An ordinary
+  // conversation's request loses AZPR's few tools so, however long its list is.)
+  const long = Object.defineProperties({ read: {}, edit: {}, azpr_read_file: {}, azpr_search: {}, [Symbol('mark')]: 'of a hook' }, { azpr_state: { value: {}, configurable: true } });
+  assert.equal(withoutTools(long, ['azpr_read_file', 'azpr_search', 'azpr_state', 'azpr_absent']), true);
+  assert.deepEqual([Object.keys(long), typeof long.azpr_state, Object.getOwnPropertySymbols(long).length], [['read', 'edit'], 'object', 1],
+    'The named tools are gone and nothing else, also not what a hook keeps unlisted under such a name.');
+  assert.deepEqual([withoutTools(Object.freeze({ azpr_read_file: {} }), ['azpr_read_file']), withoutTools(Object.freeze({ read: {} }), ['azpr_read_file']), withoutTools(watched, ['edit']), withoutTools(undefined, ['edit'])],
+    [false, true, false, true], 'A named tool that cannot be taken out is said to be left; a list that is not looked into says nothing.');
   assert.equal(asked, 0);
 });
 

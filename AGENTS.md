@@ -425,6 +425,14 @@ settings, backups and failure records. Never upload `.local/`.
   another name, or has the command after indentation or a blank line (an
   example, say) is the person's own. The names are every slash command AZPR
   has, whichever part registers it (`COMMAND_NAMES` in `config.mjs`). The
+  rule and its words are one (`strayCommand`, `strayNotice`), and it needs
+  no settings: a process that has no runtime (before a first setup, with
+  settings that cannot be used, with settings of 0.4.x waiting for their
+  update) refuses such a prompt too, in a hook that `setup.mjs` registers
+  with the commands that say that AZPR is not ready and that stands aside
+  once the runtime is loaded, whose own hook also knows the private
+  sessions. Switched off (`enabled: false`), the server part registers
+  nothing, also not this hook. The
   refusal has a cost that the documentation states (the terminal UI tries
   again in new conversations, which stay empty); never widen it to anything
   else a person types.
@@ -503,9 +511,10 @@ settings, backups and failure records. Never upload `.local/`.
   the grant of a command that is under way, and no tool call either
   (`execute.before`), whatever agent the host names. A process without
   usable settings (settings of 0.4.x waiting for their update among them)
-  loads no runtime and registers no hook, agent or tool: a session an
+  loads no runtime and registers no agent, no tool and no hook but the one
+  that refuses one of AZPR's commands sent as a prompt (above): a session an
   earlier process created runs there as it would without AZPR, with nothing
-  of AZPR's and no token, and the hooks come with the runtime.
+  of AZPR's and no token, and the admission hooks come with the runtime.
 - Pin private agent definitions at first use and refuse later host changes.
 - Shell for private roles follows the `shell` setting (default deny), enforced
   through the `permission` hook and by hiding the tool. Native edit, write,

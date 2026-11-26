@@ -533,7 +533,11 @@ every request what it collects for a conversation's directory: instruction
 files (`AGENTS.md`, `CLAUDE.md`, configured ones) and what MCP servers,
 references and skills say of themselves. AZPR keeps all of that out of its
 private sessions, which get AZPR's own instructions and OpenCode's date and
-environment; your own conversations are not touched. A reviewer can still read
+environment; your own conversations are not touched. With a `claude-agent`
+model that holds for what OpenCode hands the Claude Code program: the date
+and the environment are then Claude Code's own, and whether that program
+reads a `CLAUDE.md` of the working directory by itself was not tried with
+the real program. A reviewer can still read
 the instruction files of the PR's repository with AZPR's tools, at the
 reviewed commit, and local files on purpose. Where AZPR cannot tell these
 parts of a request apart (another plugin rewrote them, or a later OpenCode

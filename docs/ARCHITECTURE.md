@@ -864,9 +864,11 @@ The hooks treat as private every session of an AZPR role (also a role of
 0.4.x) and every session this process created or a saved review or a session
 record names. A process without usable settings, settings of 0.4.x waiting
 for their update among them, loads no runtime: it registers placeholder
-commands only, and no hook, agent or tool. A session an earlier process
+commands, no agent, no tool, and one hook, which refuses one of AZPR's
+commands that arrives as text (see below). A session an earlier process
 created then runs as it would without AZPR installed, with nothing of AZPR's
-and no token; the hooks come with the runtime once the settings load.
+and no token; the hooks that admit a private session's requests come with
+the runtime once the settings load.
 - `tool.execute.after`: records tool outcomes and pages large comment-tool
   results into private files.
 - `prompt`, `model.request`, `retry`, the tool hooks and a pending approval in
@@ -1114,8 +1116,12 @@ there that says what happened. It is the one prompt that AZPR refuses for
 its text (the other one it refuses names one of AZPR's private agents, which
 cannot be mentioned or delegated to); a prompt that only mentions a command,
 begins with another name, or shows a command after indentation or a blank
-line (an example) is the person's own. The hook comes with the runtime, so a process
-without usable settings refuses nothing, and the terminal UI answers a
+line (an example) is the person's own. The rule needs no settings: a
+process without usable settings (before a first setup, or with settings of
+0.4.x that wait for their update) refuses such a prompt as well, in a hook
+that setup registers beside its placeholder commands and that stands aside
+once the runtime is loaded. With AZPR switched off (`enabled: false`) the
+server part registers nothing, also not this hook. The terminal UI answers a
 refusal by trying again in new conversations, which stay empty.
 
 ## Setup

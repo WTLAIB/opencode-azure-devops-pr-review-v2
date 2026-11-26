@@ -6,7 +6,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { addMissingSettings, defaultPatFile, settingsFileFor, parseSetupArguments, saveSetup, setupPlugin } from '../src/setup.mjs';
-import { AFTER_REVIEW, COMMANDS, MAX_REVIEWERS, MIGRATION_NEEDED, SETTING_DEFAULTS, TERMINAL_PANEL, migrateSettings, settingsText, validateSettings, withMissingSettings } from '../src/config.mjs';
+import { AFTER_REVIEW, COMMANDS, COMMAND_NAMES, MAX_REVIEWERS, MIGRATION_NEEDED, SETTING_DEFAULTS, TERMINAL_PANEL, migrateSettings, settingsText, validateSettings, withMissingSettings } from '../src/config.mjs';
 import { AZURE_HEADERS, FAKE_PAT, azureError, fakeAzure, toolRegistry } from './fake-azure.mjs';
 import { SETUP_RPC, createSetup } from '../src/tui-setup.mjs';
 
@@ -49,7 +49,8 @@ async function fixture(t) {
       create: async () => { throw new Error('Setup must not create model sessions.'); },
       prompt: async () => { throw new Error('Setup must not prompt a model.'); },
       wait: async () => {}, context: async () => [], interrupt: async () => ({ interrupted: false }),
-      hook: async (name, callback) => { hooks.push({ name, callback }); return registration(); },
+      // Like the host, a disposed registration takes its hook with it.
+      hook: async (name, callback) => { const hook = { name, callback }; hooks.push(hook); return { dispose() { if (hooks.includes(hook)) hooks.splice(hooks.indexOf(hook), 1); } }; },
       synthetic: async input => {
         reports.push(input.text);
         notices.push({ text: input.text, metadata: input.metadata });
@@ -67,6 +68,14 @@ async function fixture(t) {
     invoke: async (name, text = '') => {
       await commands.get(name).execute({ sessionID: 'origin', prompt: { text } });
       return reports.at(-1);
+    },
+    // A prompt as the host admits one: through every `prompt` hook in the order they were registered. The first
+    // hook that refuses it ends that, and the error says which one it was (`refusedBy`, counted among them).
+    prompt: async (text, sessionID = 'conversation') => {
+      for (const [index, hook] of hooks.filter(hook => hook.name === 'prompt').entries()) {
+        try { await hook.callback({ sessionID, prompt: { text } }); }
+        catch (error) { throw Object.assign(error, { refusedBy: index }); }
+      }
     },
   };
 }
@@ -148,12 +157,75 @@ test('missing settings expose setup and blocked commands, without agents, tools 
   t.after(await f.setup());
   assert.deepEqual([...f.commands.keys()], ['pr-setup', ...Object.keys(COMMANDS)]);
   assert.equal(f.agents.size, 0);
-  assert.equal(f.hooks.length, 0);
+  // One hook, and none of the runtime's: the one that keeps a command sent as an ordinary prompt from a model.
+  assert.deepEqual(f.hooks.map(hook => hook.name), ['prompt']);
   assert.deepEqual(await f.context.tool.list(), []);
   assert.match(await f.invoke('pr-setup', '--help'), /fixture\/model[\s\S]*mode 600[\s\S]*--pat-file/);
   assert.match(await f.invoke('pr-check', 'https://example.invalid'), /SETUP REQUIRED/);
   assert.equal(f.azure.state.calls.length, 0);
   assert.deepEqual(await readdir(f.source), ['prompts']);
+});
+
+test('one of AZPR\'s commands that arrives as an ordinary prompt is stopped before a first setup too, and by the runtime\'s own hook once that is loaded', async t => {
+  const f = await fixture(t);
+  const cleanup = await f.setup({ noticeWaitMs: 150 });
+  const NOTICE = name => `[AZPR] /${name} reached OpenCode as an ordinary prompt, not as a command, so AZPR stopped it: nothing ran and no model received it. That happens when it is sent before OpenCode has loaded its commands (opencode --prompt at startup, for example). Type /${name} again once it shows in the slash-command list.`;
+  const REFUSAL = name => ({ message: `[AZPR] /${name} was sent as an ordinary prompt, not as a command; it was not passed to a model.` });
+  const told = () => f.notices.map(notice => notice.text).filter(text => text.includes('reached OpenCode as an ordinary prompt'));
+  // No settings yet: the commands only say that AZPR is not ready, and as text they would reach a model with the
+  // PR URL and the context all the same. Every command AZPR has, whichever part registers it.
+  for (const name of COMMAND_NAMES) await assert.rejects(f.prompt(`/${name} https://dev.azure.com/o/p/_git/r/pullrequest/1 focus on auth`), REFUSAL(name), name);
+  assert.deepEqual(told(), COMMAND_NAMES.map(NOTICE), 'The conversation is told, in the runtime\'s own words.');
+  // Anything else is the person's own prompt, as with the runtime: a question about a command, a longer name, a
+  // name AZPR does not have, a command that does not begin the text, and a prompt without a text.
+  for (const text of ['Hello.', 'What does /pr-review do?', '/pr-reviewer please', '/pr-unknown x', 'see /pr-review', '  /pr-comment --publish', '\n/pr-review x', '\t/pr-check', undefined, 7]) await f.prompt(text);
+  assert.equal(told().length, COMMAND_NAMES.length);
+  // A notice that cannot be left, or that the host does not answer for: the prompt is refused all the same, and
+  // the refusal does not wait for the notice for long.
+  const synthetic = f.context.session.synthetic;
+  f.context.session.synthetic = async () => { throw new Error('Fixture notice unavailable'); };
+  await assert.rejects(f.prompt('/pr-review x'), REFUSAL('pr-review'));
+  f.context.session.synthetic = () => new Promise(() => {});
+  const asked = Date.now();
+  await assert.rejects(f.prompt('/pr-check'), REFUSAL('pr-check'));
+  assert.ok(Date.now() - asked < 3000, 'The refusal waited for the notice only for a moment.');
+  f.context.session.synthetic = synthetic;
+  assert.equal(told().length, COMMAND_NAMES.length);
+  // A first setup loads the runtime, whose own hook refuses such a prompt from then on: this one stands aside,
+  // since which session is a private reviewer's, and what is said there, is the runtime's to judge.
+  assert.match(await f.invoke('pr-setup', `--organization fixture --model fixture/model --pat-file "${f.pat}"`), /AZPR has loaded them/);
+  assert.ok(f.hooks.filter(hook => hook.name === 'prompt').length === 2 && f.hooks[0].name === 'prompt', 'This hook was registered before the runtime\'s.');
+  await assert.rejects(f.prompt('/pr-review https://dev.azure.com/o/p/_git/r/pullrequest/1'), error => error.message === REFUSAL('pr-review').message && error.refusedBy === 1);
+  assert.deepEqual(told().slice(COMMAND_NAMES.length), [NOTICE('pr-review')], 'One notice, the runtime\'s.');
+  await cleanup();
+  assert.deepEqual([f.commands.size, f.hooks.length], [0, 0], 'Unloading takes the hook with everything else.');
+  // A process that starts with settings it can use has the runtime's hook alone.
+  const loaded = await f.setup();
+  assert.equal(f.hooks.filter(hook => hook.name === 'prompt').length, 1);
+  await assert.rejects(f.prompt('/pr-quick x'), REFUSAL('pr-quick'));
+  await loaded();
+  // Settings that cannot be used, and settings of 0.4.x that wait for their update: no runtime, and the same hook.
+  for (const text of ['{ "version": 3, ', JSON.stringify(legacyMinimal(f))]) {
+    await writeFile(f.path, text, { mode: 0o600 });
+    const unload = await f.setup({ environment: environmentOf(f) });
+    assert.deepEqual([f.agents.size, f.hooks.map(hook => hook.name)], [0, ['prompt']], text);
+    await assert.rejects(f.prompt('/pr-deep https://dev.azure.com/o/p/_git/r/pullrequest/1'), error => error.message === REFUSAL('pr-deep').message && error.refusedBy === 0, text);
+    await unload();
+  }
+  // Switched off, AZPR has no command and refuses nothing.
+  await writeFile(f.path, JSON.stringify({ ...minimalSettings(f), enabled: false }), { mode: 0o600 });
+  const off = await f.setup();
+  assert.deepEqual([f.commands.size, f.hooks.length], [0, 0]);
+  await f.prompt('/pr-review x');
+  await off();
+  // A host without session hooks still gets setup and the commands that say what is missing.
+  await rm(f.path);
+  const hook = f.context.session.hook;
+  delete f.context.session.hook;
+  const bare = await f.setup();
+  assert.deepEqual([[...f.commands.keys()], f.hooks.length], [['pr-setup', ...Object.keys(COMMANDS)], 0]);
+  await bare();
+  f.context.session.hook = hook;
 });
 
 test('setup writes private external settings, uses one model and loads a first setup at once', async t => {
@@ -2001,7 +2073,7 @@ test('settings of AZPR 0.4.x are neither used nor touched: the commands say that
     try {
       // No usable settings: every review command only says so, and nothing of the runtime is there.
       assert.deepEqual([...f.commands.keys()], ['pr-setup', ...Object.keys(COMMANDS)]);
-      assert.deepEqual([f.agents.size, f.hooks.length, await f.context.tool.list()], [0, 0, []]);
+      assert.deepEqual([f.agents.size, f.hooks.map(hook => hook.name), await f.context.tool.list()], [0, ['prompt'], []]);
       for (const name of Object.keys(COMMANDS)) {
         assert.equal(f.commands.get(name).description, 'AZPR is not ready here; run /pr-setup to see what it needs');
         assert.equal(await f.invoke(name, f.azure.prUrl()), UPDATE_REQUIRED(f), name);
