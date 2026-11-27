@@ -1063,9 +1063,10 @@ settings, backups and failure records. Never upload `.local/`.
 - A dangerous value is confirmed in a list whose first row keeps the current
   setting, never with the host's confirm dialog, whose default is to confirm.
 - OpenCode 2.3.0 announces commands that change after a plugin was loaded
-  without their location, and its clients ignore that event: when a first
-  setup is loaded the server part publishes the RPC event `loaded`, and the
-  terminal part reads the commands again.
+  without their location, and its full-screen terminal UI ignores that event
+  (`opencode mini` does not): when a first setup is loaded the server part
+  publishes the RPC event `loaded`, and the terminal part reads the commands
+  again.
 
 **Compatibility.** Host response shapes and constants belong in `host.mjs`.
 Detect capabilities; do not assume them. The terminal part runs in the TUI's

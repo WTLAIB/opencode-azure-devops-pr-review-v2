@@ -1065,9 +1065,10 @@ The host records two ends as a shutdown and leaves no marker for them. Its
 own shutdown ends the run with the process. The other is a known limitation:
 a step ends that way when a person declines one of its tool calls without a
 message, which only a reviewer's shell request can ask of a person
-(`shell: "ask"` or `"inherit"`), and OpenCode's terminal UI and desktop app
-send a decline in a reviewer's session without one (the terminal UI asks for
-a message only in a session that has a parent). The host has given that
+(`shell: "ask"` or `"inherit"`), and OpenCode's full-screen terminal UI and
+its desktop app send a decline in a reviewer's session without one (the
+full-screen terminal UI asks for a message only in a session that has a
+parent; `opencode mini` asks for one in any session). The host has given that
 step's message an error ("Step interrupted"), so AZPR takes no answer of the
 turn and credits none of its reads to a finding. Where no execution follows,
 the turn fails as interrupted. Where a background command of the session
@@ -1078,8 +1079,8 @@ it succeeds. The stage then goes on by its usual rules: a first turn that
 failed as interrupted ends the pass, an incomplete answer is tried again in a
 new session as far as `workflow.stageRetries` allows, and a correction or
 follow-up turn that failed leaves the latest usable answer standing. A
-decline with a message, which OpenCode's permission route accepts, is a tool
-error the reviewer goes on from.
+decline with a message (from `opencode mini`, or through the permission
+route) is a tool error the reviewer goes on from.
 
 A grant is open only during a turn: outside it the `context` hook refuses a
 request, the `model.request` hook a request that was prepared earlier, the
@@ -1298,8 +1299,9 @@ Settings that are in use are read once as well: a later save leaves
 new runs until the restart as for any changed file.
 
 OpenCode 2.3.0 to the tested version announce a change of commands that a plugin makes
-after it was loaded without the location, and their clients ignore such an event, so a
-terminal UI would keep suggesting the commands as they were. The server part
+after it was loaded without the location, and the full-screen terminal UI ignores such an
+event (`opencode mini` reads its commands again), so it would keep suggesting the commands
+as they were. The server part
 therefore publishes an RPC event (`loaded`) when it has loaded a first setup,
 and the terminal part reads the commands again when it hears it.
 
