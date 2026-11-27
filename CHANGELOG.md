@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.5.2 — 2026-11-27
+
+AZPR is tested with OpenCode 2.4.2 instead of 2.4.1. OpenCode 2.4.2 was
+compared with 2.4.1, the last version studied, and needs no change to how
+AZPR runs a review: in the three smoke runs of the host fixtures, private
+sessions were sent on 2.4.2 what they were sent on 2.4.1, request by request,
+once what differs between any two runs (paths, IDs, times) is set aside. The prompt files
+are those of 0.5.1, no setting is new, and settings and saved reviews are
+used as they are.
+
+- **`/pr-check` notes another OpenCode version instead of warning of it.** On
+  an OpenCode other than the tested one, and on one that does not say its
+  version, the OpenCode row is `ok` and names the tested release in a note.
+  It was a WARNING, which read as if something were wrong: reviews run on an
+  OpenCode V2 host that provides what AZPR needs, and what a host lacks is
+  still reported where it matters (the Project boundary WARNING without the
+  permission hook, a command's error or receipt that names a missing method,
+  the host's plugin list; see [compatibility](docs/ARCHITECTURE.md#compatibility)).
+  A script that looked for the OpenCode WARNING should read the OpenCode
+  row's note instead.
+- **A turn whose prompt is gone says what is known.** OpenCode 2.4.2's
+  terminal UI can take the last prompt back (Esc twice before the model
+  answered), and in a reviewer's session that prompt is AZPR's. Measured on
+  2.4.1 and 2.4.2 by calling the routes the terminal UI uses, in its order,
+  the turn fails as interrupted. Where the prompt is gone before AZPR reads
+  the session, the error now says that the prompt is not among the session's
+  messages exactly once and that it may have been taken back or removed by a
+  compaction; before, it named only a compaction. [Debugging](docs/DEBUGGING.md#diagnosis-order) says how a prompt is taken back
+  and what the receipt then shows. Stop a run with `/pr-stop`, not in one of
+  its sessions.
+- **Phone notifications.** From OpenCode 2.4.2 on, OpenCode's mobile app can
+  notify a paired phone when a top-level session's run ends. AZPR's private
+  sessions are top-level sessions, so one review can send several notices; a
+  phone newly registered without settings gets them all. AZPR leaves these
+  settings alone: set the phone to notify only when attention is needed, or
+  mute the `[AZPR …]` sessions there. The README and the validation record
+  now say so.
+- Tested with OpenCode 2.4.2 (was 2.4.1). The tested release is one constant,
+  `TESTED_HOST_VERSION` in `src/host.mjs`: CI installs the release it names,
+  the installer's closing message and the contributor's instructions read it,
+  and a test holds the README to it. Comments and documents date a host
+  behaviour that AZPR relies on as "OpenCode A to the tested version", so a
+  move of the tested release changes only what changed.
+- OpenCode 2.4.2 offers image and video generation to a conversation as
+  Code Mode tools instead of tools of their own. Private sessions are
+  offered neither, as before; the host fixture now also checks every private
+  request of its run for their names.
+- Now documented (0.5.1 behaves the same): with `shell: "ask"` or
+  `"inherit"`, a shell request of one of AZPR's sessions (a reviewer's, say)
+  that a person declines without a reason fails that session's turn, and
+  OpenCode's full-screen terminal UI and desktop app give none in AZPR's
+  sessions (`opencode mini` asks for one, which the model then receives as
+  the command's result). Where the decline ends the step, OpenCode records
+  the end of that execution as a shutdown, which leaves no marker of the
+  turn's end, so what the session does until a later marker, while AZPR
+  waits for it, counts to that turn; AZPR takes no answer of it. See
+  [debugging](docs/DEBUGGING.md#diagnosis-order) and the
+  [validation record](docs/VALIDATION.md#known-limitations).
+
+OpenCode 2.4.2 adds no database migration to 2.4.1, so going back to 2.4.1
+needs no restored database. AZPR 0.5.1 also runs on 2.4.2 (with the OpenCode
+WARNING row), so the order of the two upgrades does not matter.
+
+Known and not changed by this release: those that 0.5.1 lists below (see the
+[validation record](docs/VALIDATION.md#known-limitations)).
+
 ## 0.5.1 — 2026-11-26
 
 AZPR is tested with OpenCode 2.4.1 instead of 2.3.2. OpenCode 2.3.1 to 2.4.1

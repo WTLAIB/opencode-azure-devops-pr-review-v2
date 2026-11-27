@@ -1,8 +1,8 @@
 # AI development guide
 
-This repository targets the OpenCode V2 plugin API (tested with
-`@opencode/cli@2.4.1`), the Azure DevOps Services REST API (api-version 7.1)
-and Ubuntu 22.04. Public source and documentation use English. Follow the user's
+This repository targets the OpenCode V2 plugin API (tested with the
+`@opencode/cli` release that `TESTED_HOST_VERSION` in `src/host.mjs` names), the
+Azure DevOps Services REST API (api-version 7.1) and Ubuntu 22.04. Public source and documentation use English. Follow the user's
 conversation language and current authorization scope.
 
 ## Before changing anything
@@ -162,12 +162,23 @@ settings, backups and failure records. Never upload `.local/`.
 - A turn is the admitted prompt up to the first idle marker after it, and
   its answer is the last assistant message before that marker. A prompt
   becomes a message of the session only in the execution that takes it, and
-  an execution leaves one marker however it ends, so that marker is the end
-  of the execution that had the prompt and says how the turn ended; the
-  session's own outcome is its latest execution's, which can be a later one.
-  Never skip a marker: one before any answer is the turn's own end, not an
-  earlier execution's. What follows the marker is no part of the turn;
-  someone else's message there still fails it.
+  an execution leaves one marker however it ends, unless the host records
+  that end as a shutdown, so that marker is the end of the execution that had
+  the prompt and says how the turn ended; the session's own outcome is the
+  one its latest marker recorded, which can be a later execution's. Never
+  skip a marker: one before any answer is the turn's own end, not an
+  earlier execution's. What
+  follows the marker is no part of the turn; someone else's message there
+  still fails it. The host records two ends as a shutdown: its own, which
+  ends the run with the process, and that of a step that ended because a
+  person declined one of its tool calls without a message (shell `ask` or
+  `inherit`), after which the host runs on. The first marker after such a
+  turn's prompt is then a later execution's, if one comes, and until then
+  what the session does while the wait for it lasts counts to the turn (the
+  requests and tool calls of whatever the host starts there, and what those
+  return, which comment planning, for one, can hand to a later session of
+  its page); the declined step carries the host's error, so no answer of
+  such a turn is taken. A known limitation (docs/VALIDATION.md).
 - A private session gets a model request, a retry and a tool only while a
   turn of it is open (`open` on the grant). A prompt opens it, and only
   while the call that sent it still waits for that turn (`turn`): one the
@@ -1054,14 +1065,31 @@ settings, backups and failure records. Never upload `.local/`.
 - A dangerous value is confirmed in a list whose first row keeps the current
   setting, never with the host's confirm dialog, whose default is to confirm.
 - OpenCode 2.3.0 announces commands that change after a plugin was loaded
-  without their location, and its clients ignore that event: when a first
-  setup is loaded the server part publishes the RPC event `loaded`, and the
-  terminal part reads the commands again.
+  without their location, and its full-screen terminal UI ignores that event
+  (`opencode mini` does not): when a first setup is loaded the server part
+  publishes the RPC event `loaded`, and the terminal part reads the commands
+  again.
 
 **Compatibility.** Host response shapes and constants belong in `host.mjs`.
 Detect capabilities; do not assume them. The terminal part runs in the TUI's
 process: it checks the TUI plugin API it uses at setup and reads theme tokens
 through fallbacks.
+- The tested host is one constant, `TESTED_HOST_VERSION`. CI, the installer and
+  CONTRIBUTING read it; the README's badge and Compatibility row show it, and
+  `tests/release.test.mjs` holds the README to it. Name the tested version
+  nowhere else outside dated records (the dated sections of VALIDATION, the
+  changelog, release notes, ROADMAP's done entries): refer to the constant or
+  link the Compatibility row.
+- Date a host behaviour that AZPR relies on as "OpenCode A to the tested
+  version": seen from A on and still there in the tested release. Every move of
+  the tested version checks each such fact again on the new release, with a
+  source read or a probe that the study of that release lists; a behaviour
+  that ends gets a closed range then. Keep a measurement as measured ("measured
+  on 2.3.0 and 2.4.1") and a change between two releases with both ("through
+  2.4.1 …; from 2.4.2 …").
+- A study of a new host release starts from the last release studied, which is
+  the tested one, and covers every release between the two; VALIDATION records
+  each study.
 
 ## Verification and delivery
 

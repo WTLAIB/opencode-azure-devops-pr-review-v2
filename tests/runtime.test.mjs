@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { setupAzurePrReview } from '../src/runtime.mjs';
 import { COMMAND_NAMES, ROLES } from '../src/config.mjs';
 import { inlineMarker } from '../src/comments.mjs';
-import { PROGRESS_EVENT_TYPES } from '../src/host.mjs';
+import { PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
 import { createReviewStore } from '../src/store.mjs';
 import { buildPanel, nextOf, opensPanel } from '../src/tui-model.mjs';
 import { actionRows, adjustCommand, planCommand, publishCommand, savedAdjustments, stopCommand } from '../src/tui-actions.mjs';
@@ -94,7 +94,7 @@ async function fixture(t, opts = {}) {
     return { dispose() { hooks.set(key, (hooks.get(key) ?? []).filter(item => item !== fn)); } };
   };
   const nativeTools = { shell: async () => ({ output: 'shell ran' }), read: async () => ({ output: 'read ran' }) };
-  // What OpenCode 2.3.0 through 2.4.1 make of a session's messages in a request: every user message has the ID of
+  // What OpenCode 2.3.0 to the tested version make of a session's messages in a request: every user message has the ID of
   // the message it was made of, an update of the instructions is a system message of its text as one part, without
   // an ID, and a marker is no message of a request.
   const project = history => history.flatMap(message => ['user', 'synthetic'].includes(message.type) ? [{ id: message.id, role: 'user', content: [{ type: 'text', text: message.text }], ...(message.metadata ? { metadata: clone(message.metadata) } : {}) }]
@@ -128,11 +128,11 @@ async function fixture(t, opts = {}) {
   };
   const context = {
     // `version: null` is a host that does not say its version.
-    app: opts.version === null ? {} : { version: opts.version ?? '2.4.1' },
+    app: opts.version === null ? {} : { version: opts.version ?? TESTED_HOST_VERSION },
     location: { directory },
     // Like a host catalog, each configured model once, however many passes or modes name it: every reviewer, and
     // a rater that is named.
-    model: { async list() { return { data: [...new Set(Object.values(settings.models).flatMap(group => [...(group.reviewers ?? []), group.rater]).filter(value => typeof value === 'string' && value)
+    model: opts.modelList === false ? {} : { async list() { return { data: [...new Set(Object.values(settings.models).flatMap(group => [...(group.reviewers ?? []), group.rater]).filter(value => typeof value === 'string' && value)
       .map(value => value.split('#')[0]))].map(reference => ({ providerID: reference.slice(0, reference.indexOf('/')), id: reference.slice(reference.indexOf('/') + 1), enabled: true, capabilities: { tools: true }, variants: [{ id: 'high' }] })) }; } },
     ...(opts.permissionHook === false ? {} : { permission: { hook: hook('permission') } }),
     ...(opts.plugins ? { plugin: { async list() { return typeof opts.plugins === 'function' ? opts.plugins() : { data: clone(opts.plugins) }; } } } : {}),
@@ -256,7 +256,7 @@ async function fixture(t, opts = {}) {
             session.history.push({ id: `answer_${++seq}`, type: 'assistant', agent: role, model, finish: 'stop', time: { created: 1, completed: 2 },
               ...(opts.tokens ? { tokens: opts.tokens({ role, turn }) } : {}),
               content: [{ type: 'text', text: typeof result === 'string' ? result : JSON.stringify(result) }] });
-            // Like OpenCode 2.3.0 through 2.4.1: an execution goes on while input reaches the session, leaves its
+            // Like OpenCode 2.3.0 to the tested version: an execution goes on while input reaches the session, leaves its
             // marker when it ends, and what the host starts in the session right afterwards (a late notice of a
             // background command) is still covered by a wait for the session. `resting` is what reaches the session
             // while it goes idle, in the same execution; `woken` what the host does in it after the marker, before
@@ -1965,28 +1965,58 @@ test('/pr-check names the running installation and warns about another AZPR entr
   assert.match(masked, /\| AZPR \| WARNING \| Another AZPR entry .* Running git\+https:\/\/\*\*\*@github\.com\/WTLAIB\/opencode-azure-devops-pr-review-v2\.git#v0\.3\.0 \(commit 6dcb4d2\); not running: git\+https:\/\/\*\*\*@github\.com\/WTLAIB\/opencode-azure-devops-pr-review-v2\.git\?\*\*\*#main \(/, 'The row is cut at 300 characters after the advice and both masked labels.');
 });
 
+// The tested release as a pattern of the rendered report.
+const TESTED = TESTED_HOST_VERSION.replaceAll('.', '\\.');
+
 test('/pr-check names the tested OpenCode version in its own row', async t => {
   const f = await fixture(t);
   const check = await f.command('pr-check');
-  assert.match(check, /\| OpenCode \| ok \| OpenCode 2\.4\.1, the tested version\. \|/);
+  assert.match(check, new RegExp(`\\| OpenCode \\| ok \\| OpenCode ${TESTED}, the tested version\\. \\|`));
   assert.doesNotMatch(check, /Host notice/);
 });
 
-test('another OpenCode version is a /pr-check warning, not a failure; review receipts carry no host notice', async t => {
-  const f = await fixture(t, { version: '2.2.5' });
-  const check = await f.command('pr-check');
-  assert.match(check, /\] READY/);
-  assert.match(check, /\| OpenCode \| WARNING \| OpenCode 2\.2\.5; AZPR is tested with 2\.4\.1\. Reviews still run: AZPR detects what this OpenCode provides and refuses to start if something it needs is missing\. \|/);
-  const review = await f.command('pr-review', f.azure.prUrl(), 'review');
-  assert.match(review, /\] COMPLETE/);
-  assert.doesNotMatch(check + review, /Host notice|differs from the tested/);
+test('another OpenCode version, or one that reports none, is a note in /pr-check, not a warning; review receipts carry no host notice', async t => {
+  // Reviews run on an OpenCode V2 host that provides what AZPR needs, which AZPR checks when it loads and when a
+  // command starts: a warning would say that something is wrong where nothing is.
+  for (const [version, host] of [['2.2.5', 'OpenCode 2\\.2\\.5'], [null, 'OpenCode did not report its version']]) {
+    const f = await fixture(t, { version });
+    const check = await f.command('pr-check');
+    assert.match(check, /\] READY/, String(version));
+    assert.match(check, new RegExp(`\\| OpenCode \\| ok \\| ${host}\\. Note: AZPR is tested with ${TESTED}\\. Reviews run on an OpenCode V2 host that provides what AZPR needs; AZPR checks that when it loads and when a command starts, and refuses a command it cannot run\\. \\|`), String(version));
+    assert.doesNotMatch(check, /\| OpenCode \| WARNING \|/, String(version));
+    // A receipt names its debug directory, below the fixture's: that path is the machine's, no word about the host.
+    const review = (await f.command('pr-review', f.azure.prUrl(), 'review')).split(f.directory).join('<directory>');
+    assert.match(review, /\] COMPLETE/, String(version));
+    assert.doesNotMatch(check.split(f.directory).join('<directory>') + review, /Host notice|differs from the tested/, String(version));
+    assert.doesNotMatch(review, /tested with|the tested version/, `${version}: a review receipt does not repeat the host version.`);
+    for (const text of [version ?? 'did not report its version', TESTED_HOST_VERSION]) assert.ok(!review.includes(text), `${version}: the review receipt names ${text}.`);
+  }
+});
+
+test('a host that lacks a method the review workflow needs fails the command with its name, before anything starts', async t => {
+  const f = await fixture(t);
+  delete f.context.session.interrupt;
+  // The host shows a command's error to the person who typed it.
+  await assert.rejects(f.commands.get('pr-review').execute({ sessionID: 'ordinary', prompt: { text: f.azure.prUrl() } }), /^Error: \[AZPR\] OpenCode does not provide session\.interrupt; the review workflow is unavailable\.$/);
+  assert.equal(f.notices.filter(notice => /\] STARTED /.test(notice.text)).length, 0, 'Nothing started.');
+  assert.equal(f.calls.filter(call => call.kind === 'create').length, 0, 'No session was created.');
+});
+
+test('a host without the model catalog starts the run, which ends INCOMPLETE and names it', async t => {
+  // The catalog is asked for at the readiness check every run begins with, after its STARTED notice; AZPR registers
+  // without it.
+  const f = await fixture(t, { modelList: false });
+  const receipt = await f.command('pr-review', f.azure.prUrl(), 'review');
+  assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] INCOMPLETE; verification none\nReason \(workflow\): \[AZPR\] OpenCode does not provide model\.list; readiness checks is unavailable\.\n/);
+  assert.equal(f.notices.filter(notice => /\] STARTED \/pr-review /.test(notice.text)).length, 1, 'The run started.');
+  assert.equal(f.calls.filter(call => call.kind === 'create').length, 0, 'No session was created.');
 });
 
 test('a host without the permission hook gets a /pr-check warning about the project boundary; reviews still run', async t => {
   const f = await fixture(t, { permissionHook: false });
   const check = await f.command('pr-check');
   assert.match(check, /\] READY/, 'A missing permission hook is a warning, not a failure.');
-  assert.match(check, /\| Project boundary \| WARNING \| This OpenCode has no permission hook, so AZPR cannot keep private reviewers' native read, glob and grep inside the project; .* OpenCode 2\.4\.1, the tested version, has the hook\. \|/);
+  assert.match(check, new RegExp(`\\| Project boundary \\| WARNING \\| This OpenCode has no permission hook, so AZPR cannot keep private reviewers' native read, glob and grep inside the project; .* OpenCode ${TESTED}, the tested version, has the hook\\. \\|`));
   assert.match(await f.command('pr-review', f.azure.prUrl(), 'review'), /\] COMPLETE/);
 });
 
@@ -5346,7 +5376,7 @@ test('the terminal panel reads what a review, its report and its preview tell th
   assert.match(checked.markdown, /^## Source readiness\n[\s\S]*\n\| Check \| Result \| Detail \|\n/, 'The check\'s table is the document.');
 });
 
-// OpenCode 2.3.0 through 2.4.1 add to every request what they collect for the place a conversation is in, and
+// OpenCode 2.3.0 to the tested version add to every request what they collect for the place a conversation is in, and
 // leave the instruction files near a file the native read tool read in the session as a message of their own.
 const PLACE_SOURCES = [{ key: 'core/mcp-guidance', text: 'MCP SERVER SAYS' }, { key: 'core/instructions', text: 'Instructions from: /work/AGENTS.md\nLOCAL RULES' },
   { key: 'core/date', text: "Today's date: Wed Nov 25 2026" }, { key: 'core/environment', text: 'Here is some useful information about the environment you are running in:\n<env>\n</env>' }];
@@ -5825,7 +5855,7 @@ test('a message that asks the model to continue an interrupted answer is the hos
   const joined = await earlier.command('pr-quick');
   assert.match(joined, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete; verification none\n/);
   assert.equal((await stageRecords(joined)).find(record => record.role === 'azpr-quick-reviewer').hostContinuations, 1);
-  for (const version of ['2.3.0', '2.4.1', '0.0.0-dev', null]) {
+  for (const version of ['2.3.0', '2.4.1', TESTED_HOST_VERSION, '0.0.0-dev', null]) {
     const current = await fixture(t, { settings: quickSettings, version, answer });
     assert.equal(current.context.app.version, version ?? undefined);
     const refused = await current.command('pr-quick');

@@ -441,8 +441,10 @@ output, tool starts and ends, approval requests and announced host retries are
 activity (an announced retry wait is added to the window), and a running AZPR
 tool counts until it returns because its Azure calls have their own timeouts.
 Streamed output reaches no hook, so while a stage is watched AZPR follows
-OpenCode's session events (`event.subscribe`), which carry one event per
-streamed chunk of answer text, reasoning or tool-call input. AZPR asks for
+OpenCode's session events (`event.subscribe`): the answer text and reasoning
+as they stream (OpenCode publishes what is pending every 100 ms and when a
+part ends), and the start and end of a tool call's input, whose chunks in
+between it does not publish. AZPR asks for
 those progress types only; OpenCode 2.2.0 and later deliver nothing else. A
 host without them leaves only the hooks. A stage with
 no activity for the whole window is stopped: its grant is revoked, its session
@@ -451,8 +453,11 @@ activity, such as `Stage inactivity watchdog stopped this stage: no activity
 for 600 s after model request 3 was sent`; the receipt adds an inactivity
 notice. It is retried in a new session like a transient failure. Any activity
 restarts the window, so this is not the whole-run timeout or step cap the
-[roadmap](ROADMAP.md#deferred) defers: a stage that keeps working is never
-stopped. The longest quiet stretch in 1,097 normal live stages was 151 s
+[roadmap](ROADMAP.md#deferred) defers: a stage whose progress keeps reaching
+AZPR is not stopped. A model that streams nothing but one tool call's
+arguments for the whole window shows no progress, and neither does a stream
+whose session events do not reach AZPR (a host without them, or a feed that
+failed). The longest quiet stretch in 1,097 normal live stages was 151 s
 (stages of versions before 0.5.0).
 
 An interrupted model stream that OpenCode recovers by itself costs no new
@@ -917,7 +922,7 @@ local directory, which is not the PR's repository; with a large instruction
 file they also multiply the size of every private request. The `context` hook
 therefore rebuilds that part from the date and the environment alone
 (`withoutPlaceInstructions` in `host.mjs`). It can do so because OpenCode
-2.3.0 through 2.4.1 keep each source as `{ key, text }` in the part's
+2.3.0 to the tested version keep each source as `{ key, text }` in the part's
 `metadata.experimental.instructions`, a field the host marks as experimental:
 where no part has that form, more than one has it, or a part's text is not its
 sources joined, the parts stay as they are and the stage's debug record counts
@@ -1044,16 +1049,32 @@ default, a private role has no shell call and no such notice is accepted.
 **A turn, and what is open during it.** A turn is the admitted prompt and
 what follows it up to the first idle marker; its answer is the last assistant
 message before that marker, and that marker says how the turn ended. This
-follows how OpenCode 2.3.0 through 2.4.1 run a session. A prompt that is
+follows how OpenCode 2.3.0 to the tested version run a session. A prompt that is
 admitted waits in the session's inbox and becomes a message only in the
 execution that takes it. An execution is one busy period: it goes on while
 input reaches the session, and leaves one marker when it ends, however it
-ends. So the first marker after the prompt is the end of the execution that
-had the prompt, also where the model never answered (the turn was interrupted
-or failed), and what another execution wrote after it is not the turn's: a
-command that ended later woke the session, and neither what the host wrote
-then nor how that ended changes the answer. The session's own outcome is its
-latest execution's, which can be that later one.
+ends, unless the host records that end as a shutdown (below). So the first
+marker after the prompt is the end of the execution that had the prompt, also
+where the model never answered (the turn was interrupted or failed), and what
+another execution wrote after it is not the turn's: a command that ended
+later woke the session, and neither what the host wrote then nor how that
+ended changes the answer. The session's own outcome is the one its latest
+marker recorded, which can be that later execution's.
+
+The host records two ends as a shutdown and leaves no marker for them. Its
+own shutdown ends the run with the process. The other is a known limitation:
+that of a step that ended because a person declined one of its tool calls
+without a message (with `shell: "ask"` or `"inherit"` a shell request asks a
+person; OpenCode's full-screen terminal UI and its desktop app decline in
+AZPR's sessions without a message, `opencode mini` asks for one). The first
+marker after the turn's prompt is then a later execution's, if one comes,
+and until then what the session does while the grant is open counts to the
+turn: the model requests and tool calls of whatever execution the host
+starts in it, and what those calls return (comment planning, for one, can
+hand it to a later session of the same page). The host has given the
+declined step's message an error ("Step interrupted"), so AZPR takes no
+answer of that turn. A decline with a message is the command's result
+instead: the model receives the message and goes on.
 
 A grant is open only during a turn: outside it the `context` hook refuses a
 request, the `model.request` hook a request that was prepared earlier, the
@@ -1271,9 +1292,10 @@ Settings that are in use are read once as well: a later save leaves
 `state: restart`, the dialogs say so at the setting, and the runtime refuses
 new runs until the restart as for any changed file.
 
-OpenCode 2.3.0 through 2.4.1 announce a change of commands that a plugin makes
-after it was loaded without the location, and their clients ignore such an event, so a
-terminal UI would keep suggesting the commands as they were. The server part
+OpenCode 2.3.0 to the tested version announce a change of commands that a plugin makes
+after it was loaded without the location, and the full-screen terminal UI ignores such an
+event (`opencode mini` reads its commands again), so it would keep suggesting the commands
+as they were. The server part
 therefore publishes an RPC event (`loaded`) when it has loaded a first setup,
 and the terminal part reads the commands again when it hears it.
 
@@ -1638,16 +1660,35 @@ says why.
 ## Compatibility
 
 `host.mjs` normalizes list/record response shapes, detects optional capabilities
-(`permission.hook`, `tool.transform`) and holds the host continuation text.
-Without `permission.hook` the project boundary for native read tools is left to
-the host's own permission rules; `/pr-check` shows a WARNING row and reviews
-still run. With `plugin.list`, `/pr-check` names the installation that runs
-and warns about any other AZPR entry the host configured but does not run,
-such as a second version that OpenCode 2.1.4 through 2.4.1 list as a duplicate plugin ID;
-a host without it gets an information row.
-`/pr-check` names the detected OpenCode version in a row of its own and warns
-when it is not the tested one (`TESTED_HOST_VERSION`, 2.4.1); reviews still
-run, and other receipts do not repeat it.
+(`permission.hook`, `plugin.list` and others) and holds the host continuation text.
+What a host that lacks something shows a person:
+- Registration needs a set of methods, `tool.transform` among them
+  (`requireMethods` in `runtime.mjs`). Where OpenCode starts with usable
+  settings, a host without one leaves AZPR unregistered, and the host's plugin
+  list reports that with the error; so does a host without what setup itself
+  registers with (`command.list`, `command.transform`). During a first setup
+  on a host that has those, the runtime is loaded when the setup is saved:
+  where a method it needs is missing, the setup's own commands stay, and they
+  and `/pr-setup` say that the saved settings could not be loaded, and why.
+- A command whose workflow needs a method the host lacks fails with an error
+  that names the method: the review workflow's session methods before its
+  STARTED notice; the model catalog (`model.list`) at the readiness check
+  every run begins with, after STARTED, so that run ends INCOMPLETE and its
+  receipt names the method. Posting a saved preview asks for no model
+  catalog.
+- Without `permission.hook` the project boundary for native read tools is left to
+  the host's own permission rules; `/pr-check` shows a WARNING row and reviews
+  still run.
+- With `plugin.list`, `/pr-check` names the installation that runs and warns
+  about any other AZPR entry the host configured but does not run, such as a
+  second version that OpenCode 2.1.4 to the tested version list as a duplicate
+  plugin ID; a host without it gets an information row.
+
+`/pr-check` names the detected OpenCode version in a row of its own. On another
+release than the tested one (`TESTED_HOST_VERSION`), and on a host that reports
+no version, that row is `ok` with a note naming the tested release: reviews run
+on an OpenCode V2 host that provides what AZPR needs, which AZPR checks as above.
+Until 0.5.1 that row was a WARNING. Other receipts do not repeat the version.
 REST paths and the pinned api-version live only in `azure.mjs`; see
 [Azure DevOps access](AZURE_DEVOPS.md) for the API list and version policy.
 

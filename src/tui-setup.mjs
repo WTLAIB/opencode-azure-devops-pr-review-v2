@@ -30,9 +30,9 @@ export const SETUP_RPC = Object.freeze({
   }),
   events: Object.freeze({
     /**
-     * A first setup was loaded: the review commands are the real ones now. OpenCode 2.3.0 through 2.4.1 announce a
-     * change of commands that a plugin makes after it was loaded without saying where, and their clients then keep
-     * the list they have; the terminal part reads the commands again when it hears this.
+     * A first setup was loaded: the review commands are the real ones now. OpenCode 2.3.0 to the tested version announce a
+     * change of commands that a plugin makes after it was loaded without saying where, and the full-screen terminal UI
+     * then keeps the list it has; the terminal part reads the commands again when it hears this.
      */
     loaded: Object.freeze({ schema: anyObject }),
   }),

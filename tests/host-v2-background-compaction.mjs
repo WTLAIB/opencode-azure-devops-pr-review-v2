@@ -15,8 +15,10 @@ import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
  * again once the turn has ended, which is refused as well). It reviewed every
  * file, so the review is COMPLETE and its coverage is complete, and the
  * receipt says that no file was reviewed in every pass.
- * The models' window is 100,000 tokens. OpenCode (2.3.0 through 2.4.1) compacts in the turn
- * once the context reaches the window less 16,000 tokens (84,000) and starts a
+ * The models' window is 100,000 tokens. OpenCode (2.3.0 to the tested version) compacts in the turn
+ * once the context reaches the window less the larger of 15 % of it and, for a
+ * window of at least 32,000 tokens, 16,000 tokens, where no buffer is configured
+ * (here 84,000), and starts a
  * summary earlier: within 60,000 tokens of that ceiling, at most half the room
  * the session began with (here from 42,000 tokens on). One response alone
  * therefore never reaches the threshold, and the large context (80,000) comes

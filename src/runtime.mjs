@@ -1215,10 +1215,12 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         checks.push({ name, ok: true, warning: true, detail: `${passesOf(mode)}; ${ratingOf(mode)}. models.deep repeats models.review, so /pr-deep would only repeat /pr-review; set stronger models or more passes there for the PRs that need them.` });
       } else checks.push({ name, ok: true, detail: `${passesOf(mode)}; ${ratingOf(mode)}.` });
     }
-    // One OpenCode release is validated; on others, reviews still run and what AZPR needs is detected at runtime.
+    // One OpenCode release is validated. Another one is noted, not warned of: reviews run on an OpenCode V2 host
+    // that provides what AZPR needs, which AZPR checks when it loads and when a command starts. What a host lacks
+    // is reported where it matters (the Project boundary row below, a command's own error, the host's plugin list).
     const host = capabilities.version === 'unknown' ? 'OpenCode did not report its version' : `OpenCode ${capabilities.version}`;
     checks.push(capabilities.tested ? { name: 'OpenCode', ok: true, detail: `${host}, the tested version.` }
-      : { name: 'OpenCode', ok: true, warning: true, detail: `${host}; AZPR is tested with ${TESTED_HOST_VERSION}. Reviews still run: AZPR detects what this OpenCode provides and refuses to start if something it needs is missing.` });
+      : { name: 'OpenCode', ok: true, detail: `${host}. Note: AZPR is tested with ${TESTED_HOST_VERSION}. Reviews run on an OpenCode V2 host that provides what AZPR needs; AZPR checks that when it loads and when a command starts, and refuses a command it cannot run.` });
     checks.push(await installationCheck(run));
     // Settings this version knows and the file left out: written into it when AZPR loaded, or the reason they were not.
     // What the file lacks is read from its text as the preflight just accepted it, so a file another load completed
@@ -2265,7 +2267,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // Enforce the shell setting and the project boundary, regardless of
       // permission rules the host appends after this plugin. Outside the
       // project only AZPR's own private data is readable; the host's default
-      // for other paths is not trusted (OpenCode 2.0.22 asked; 2.0.31 through 2.4.1 allow).
+      // for other paths is not trusted (OpenCode 2.0.22 asked; 2.0.31 to the tested version allow).
       // Private reviewers run unattended: a request that would wait for
       // approval is refused at once. Only shell keeps host approvals, and only
       // when the user allowed it (shell: "ask" or "inherit").

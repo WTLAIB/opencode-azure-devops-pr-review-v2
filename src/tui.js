@@ -1235,7 +1235,7 @@ function setupPart(context) {
       variants: (Array.isArray(model.variants) ? model.variants : []).map(variant => variant?.id).filter(id => typeof id === "string" && id)
     }));
   };
-  // The commands as the server has them now. OpenCode 2.3.0 through 2.4.1 do not tell their clients where commands changed
+  // The commands as the server has them now. OpenCode 2.3.0 to the tested version do not tell their clients where commands changed
   // when a plugin changes them after it was loaded, so after a first setup the list is read again here.
   const commandsChanged = () => {
     if (disposed) return;

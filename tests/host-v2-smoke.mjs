@@ -152,6 +152,10 @@ const cut = new Set();
 const lastUser = messages => messages?.findLast(message => message.role === 'user')?.content;
 const firstUser = messages => messages?.find(message => message.role === 'user')?.content;
 const textOf = content => typeof content === 'string' ? content : Array.isArray(content) ? content.map(part => part.text ?? '').join('') : '';
+// The groups of tools that the Code Mode catalog in a request's system text lists, one line each (OpenCode 2.4.2:
+// "- generate_image (1 tool)", "- generate_video (1 tool, none shown)", "- opencode (9 tools, 5 shown) // …").
+const catalogOf = messages => [...(messages ?? []).filter(message => message.role === 'system').map(message => textOf(message.content)).join('\n')
+  .matchAll(/^- ([\w-]+) \(\d+ tools?(?:, (?:\d+|none) shown)?\)(?: \/\/ .*)?$/gm)].map(match => match[1]);
 const kindOf = payload => payload?.assignment?.kind === 'duplicates' ? 'duplicates' : payload?.assignment?.kind === 'rating' ? 'rating'
   : Array.isArray(payload?.assignment?.files) ? 'review' : ['group', 'plan'].includes(payload?.commentWork?.kind) ? payload.commentWork.kind : 'chat';
 const provider = createServer(async (request, response) => {
@@ -167,7 +171,11 @@ const provider = createServer(async (request, response) => {
     toolResults: parsed.messages?.filter(message => message.role === 'tool').length ?? 0,
     lastTool: textOf(parsed.messages?.findLast(message => message.role === 'tool')?.content).slice(0, 600),
     // Which of the fixture's marks the whole request holds, wherever: system prompt, messages or tool results.
-    marks: Object.keys(MARKS).filter(name => body.includes(MARKS[name])) });
+    marks: Object.keys(MARKS).filter(name => body.includes(MARKS[name])),
+    // Whether the whole request names OpenCode's image or video generation, wherever: a tool, a Code Mode catalog,
+    // a message. The checkout's own path is no name of a tool, wherever it is, as it is or as JSON writes it.
+    names: ['generate_image', 'generate_video'].filter(name => body.split(sourceRoot).join('<checkout>').split(JSON.stringify(sourceRoot).slice(1, -1)).join('<checkout>').includes(name)),
+    catalog: catalogOf(parsed.messages) });
   const repair = textOf(lastUser(parsed.messages)).startsWith('AZPR runtime');
   const toolResults = parsed.messages?.filter(message => message.role === 'tool').length ?? 0;
   if (payload?.userContext?.includes('hang-smoke')) {
@@ -307,9 +315,11 @@ await writeFile(join(directories.config, 'opencode.json'), JSON.stringify({
   // fixture's environment turns off the instruction files of the project directory, not this one.)
   instructions: [placeInstructions],
   providers: { fixture: { package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: providerURL, apiKey: 'unused' },
-    // An image model makes OpenCode 2.2.2 and later offer generate_image to every agent, and a video model makes
-    // OpenCode 2.4.0 and later offer generate_video: the fixture names both, so that neither depends on what the
-    // host's built-in catalog happens to enable.
+    // An image model makes OpenCode 2.2.2 to the tested version offer image generation (`generate_image`; before
+    // 2.4.0 `experimental_image_generate`), and a video model makes 2.4.0 to the tested version offer
+    // `generate_video`, to an agent that does not deny them, as tools of their own through 2.4.1 and as Code Mode
+    // tools from 2.4.2. The fixture names both models, so that neither depends on what the host's built-in catalog
+    // happens to enable.
     models: { ...Object.fromEntries(['fixture', 'first', 'second', 'rater', 'quick'].map(id => [id, { limit: { context: 100000, output: 4000 } }])),
       image: { type: 'image', limit: { context: 100000, output: 4000 } }, video: { type: 'video', limit: { context: 100000, output: 4000 } } } } },
   // With CodeMode execute denied, OpenCode 2.2.0 and later list a CodeMode MCP server's tools directly.
@@ -586,7 +596,8 @@ try {
   const refusal = await fetch(`${url}/api/session/${offOrigin}/command`, { method: 'POST', headers: { authorization: auth, 'content-type': 'application/json', 'x-opencode-directory': directories.work },
     body: JSON.stringify({ name: 'pr-deep', text: prUrl, delivery: 'steer' }), signal: AbortSignal.timeout(60000) });
   const refusalText = await refusal.text();
-  // OpenCode answers a command that throws with its error (2.3.0 through 2.4.1: HTTP 500, CommandExecutionError).
+  // OpenCode answers a command that throws with its error (2.3.0 to the tested version: `CommandExecutionError`, which
+  // OpenCode's protocol answers with HTTP 500; the step checks the error and that the answer is no success).
   assert.equal(refusal.ok, false, refusalText);
   assert.deepEqual(JSON.parse(refusalText), { _tag: 'CommandExecutionError', command: 'pr-deep',
     message: '[AZPR] /pr-deep is off: models.deep.reviewers names no model. Name at least one with /pr-setup or in the settings file (stronger than those of models.review, or more passes), then restart the OpenCode service (opencode service restart). No fallback to the models of another mode.' }, `${refusal.status} ${refusalText}`);
@@ -1121,12 +1132,16 @@ try {
   const chatRequest = requests.slice(beforeChat).find(request => request.sessionID === chat);
   assert.ok(chatRequest, 'The ordinary chat reached the provider.');
   assert.ok(chatRequest.tools.some(name => /lookup/.test(name)), 'Ordinary sessions keep foreign MCP tools.');
-  assert.ok(chatRequest.tools.includes('generate_image'), 'Positive control: OpenCode offers image generation to ordinary sessions.');
-  assert.ok(chatRequest.tools.includes('generate_video'), 'Positive control: OpenCode offers video generation to ordinary sessions.');
+  // As a tool of its own (through 2.4.1), or as a Code Mode tool (from 2.4.2): an entry of the catalog in the system
+  // text, run with `execute`.
+  const offered = name => chatRequest.tools.includes(name) || (chatRequest.tools.includes('execute') && chatRequest.catalog.includes(name));
+  assert.ok(offered('generate_image'), `Positive control: OpenCode offers image generation to ordinary sessions. Tools: ${chatRequest.tools.join(', ')}; catalog: ${chatRequest.catalog.join(', ')}`);
+  assert.ok(offered('generate_video'), `Positive control: OpenCode offers video generation to ordinary sessions. Tools: ${chatRequest.tools.join(', ')}; catalog: ${chatRequest.catalog.join(', ')}`);
   assert.ok(!chatRequest.tools.some(name => name.startsWith('azpr_')), 'Ordinary sessions never see AZPR tools.');
   // Positive control for what the private sessions are spared: OpenCode does add the configured instruction file.
   assert.deepEqual(chatRequest.marks, ['place'], 'An ordinary conversation\'s model gets the instruction file the configuration names.');
-  results.toolScopes = 'AZPR tools only in private sessions; foreign MCP tools (direct and CodeMode) and image generation only in ordinary sessions';
+  const forms = new Set(['generate_image', 'generate_video'].map(name => chatRequest.tools.includes(name) ? 'tools of their own' : 'Code Mode tools'));
+  results.toolScopes = `AZPR tools only in private sessions; foreign MCP tools (direct and CodeMode) and image and video generation (${[...forms].join(' and ')}) only in ordinary sessions`;
 
   // 5b. One of AZPR's commands that reaches OpenCode as an ordinary prompt, as the terminal UI sends it when it is
   //     submitted before the commands are loaded (opencode --prompt "/pr-check …"). No command ran, and a model
@@ -1275,6 +1290,11 @@ try {
   assert.ok(requests.every(request => !request.marks.includes('nested') && !request.marks.includes('stray')),
     `A request carried the nested instruction file or the stray command: ${JSON.stringify(requests.filter(request => request.marks.some(mark => mark !== 'place')).map(request => [request.kind, request.model, request.marks]))}`);
   assert.ok(requests.some(request => request.kind === 'chat' && request.marks.includes('place')), 'Positive control: an ordinary conversation did carry the configured instruction file.');
+  // No private request names image or video generation anywhere: as a tool, in a Code Mode catalog or in a message.
+  // That holds for this fixture's data, which names neither; a real PR may name them, and what keeps a private
+  // reviewer from such a tool is its allowlist and the refusal of a call.
+  assert.ok(privateRequests.every(request => !request.names.length),
+    `A private session's request named image or video generation: ${JSON.stringify(privateRequests.filter(request => request.names.length).map(request => [request.kind, request.model, request.names]))}`);
 
   console.log(JSON.stringify({ status: 'PASS', installation: native ? 'native' : replacement ? 'replace' : 'fresh', host: hostVersion, providerRequests: requests.length, azureCalls: azure.state.calls.length, results, fixture }, null, 2));
 } finally {

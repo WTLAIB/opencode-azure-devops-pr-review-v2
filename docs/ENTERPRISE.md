@@ -6,7 +6,8 @@ MCP dependency. Start with the [quickstart](QUICKSTART.md), then use
 this page to understand access, data flow and local retention before reviewing
 your team's repositories.
 
-The tested environment is **OpenCode V2 `@opencode/cli` 2.4.1 on Ubuntu
+The tested environment is **OpenCode V2 `@opencode/cli` at the release the
+README's [Compatibility](../README.md#compatibility) row names, on Ubuntu
 22.04**. Azure DevOps Server URLs are not supported. See
 [current validation](VALIDATION.md) for the distinction between isolated tests
 with fake services and runs against real Azure DevOps and model providers.
@@ -324,7 +325,8 @@ according to your team's retention needs.
 ## Company networks
 
 Three kinds of connection leave your machine, and each is configured where it
-is made. Set up the first before `opencode plugin add`:
+is made; a fourth leaves only where a phone is paired with OpenCode (below).
+Set up the first before `opencode plugin add`:
 
 | Connection | Made by | Configure |
 | --- | --- | --- |
@@ -351,6 +353,15 @@ is made. Set up the first before `opencode plugin add`:
   when `opencode plugin add` makes it; when the service makes it, AZPR's
   commands disappear until the package is available and the service restarts
   (see [upgrading](../README.md#upgrading)).
+- OpenCode 2.4.2 and later can notify a phone paired with OpenCode's mobile
+  app, through OpenCode's own relay. Only with a paired phone, the background
+  service sends each notice there, sealed for that phone: the session's
+  title and what the notice is about (a run that ended, a question, a
+  permission request), for a question its text (AZPR's private sessions ask
+  none), and for a permission request what it asks for, such as a
+  reviewer's shell command under `shell: "ask"`. AZPR's `azure.proxy`
+  and `azure.caFile` do not apply to it, and AZPR leaves the phone's settings
+  alone (see [phone notifications](VALIDATION.md#known-limitations)).
 
 ### Azure DevOps requests
 

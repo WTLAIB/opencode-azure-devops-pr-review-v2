@@ -1,7 +1,8 @@
 # Roadmap
 
-Tested with OpenCode CLI 2.4.1, the Azure DevOps Services REST API
-(api-version 7.1) and Ubuntu 22.04. [Current validation](VALIDATION.md) records what this revision was tested
+Tested with the OpenCode CLI release the README's
+[Compatibility](../README.md#compatibility) row names, the Azure DevOps
+Services REST API (api-version 7.1) and Ubuntu 22.04. [Current validation](VALIDATION.md) records what this revision was tested
 with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
 
 ## Implemented (stability revision)
@@ -61,6 +62,14 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   fails its pass where shell is allowed, a private session runs only while a
   turn of it is open, and one of AZPR's commands that reaches OpenCode as an
   ordinary prompt is stopped before a model gets it.
+- **OpenCode 2.4.2 as the tested host (0.5.2).** No change to how a review
+  runs: in the three smoke runs, 2.4.2 sends private sessions what 2.4.1
+  sent, request by request, once paths, IDs and times are set aside.
+  `/pr-check` notes
+  another OpenCode version instead of warning of it, the tested release is
+  one constant that CI, the installer and the README follow, and the error
+  for a reviewer's prompt that is gone names the causes it may have, a
+  prompt taken back in the terminal UI among them.
 - **Rows the host's read returns whole (0.5.1).** The pages of AZPR's
   private data hold rows short enough for OpenCode's native read, which cut
   every row after 2,000 characters, so a model that read a large value in

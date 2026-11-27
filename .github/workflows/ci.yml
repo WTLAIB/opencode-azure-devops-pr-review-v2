@@ -20,8 +20,11 @@ jobs:
         run: npm ci --no-audit --no-fund
       - run: npm run check
       - run: npm test
-      - name: Install the tested host (OpenCode 2.4.1, TESTED_HOST_VERSION in src/host.mjs) into a disposable prefix
-        run: npm install --prefix "$RUNNER_TEMP/azpr-host" --no-audit --no-fund @opencode/cli@2.4.1
+      - name: Install the tested host (the version TESTED_HOST_VERSION in src/host.mjs names) into a disposable prefix
+        run: |
+          version=$(node --input-type=module -e "import('./src/host.mjs').then(m => process.stdout.write(m.TESTED_HOST_VERSION))")
+          test -n "$version"
+          npm install --prefix "$RUNNER_TEMP/azpr-host" --no-audit --no-fund "@opencode/cli@$version"
       - name: Exercise fresh installed package and host lifecycle
         run: node tests/host-v2-smoke.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode"
       - name: Exercise replacement package and host lifecycle

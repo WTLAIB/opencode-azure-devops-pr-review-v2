@@ -11,6 +11,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { PROMPTS } from '../src/config.mjs';
+import { TESTED_HOST_VERSION } from '../src/host.mjs';
 
 const pkg = dirname(dirname(fileURLToPath(import.meta.url)));
 const destination = 'plugins/azpr-v2';
@@ -133,6 +134,13 @@ test('fresh installation creates one V2 package and preserves existing configura
   assert.equal(statSync(installed(s, 'settings.json')).mode & 0o777, 0o600);
   assert.equal(readFileSync(installed(s, 'LICENSE'), 'utf8'), readFileSync(join(pkg, 'LICENSE'), 'utf8'));
   assert.equal(Object.hasOwn(JSON.parse(readFileSync(installed(s, 'settings.json'), 'utf8')).models, '_help'), false);
+});
+
+test('the closing message names the tested OpenCode release that the installed host.mjs names', () => {
+  const s = setup();
+  const result = install(s);
+  ok(result);
+  assert.ok(result.stdout.includes(`\nAzure PR Review installed (target host: @opencode/cli ${TESTED_HOST_VERSION}; Ubuntu 22.04).\n`), result.stdout);
 });
 
 // OpenCode 2.0.22 Host.resolve resolves local <directory>/server before index;
