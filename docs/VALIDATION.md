@@ -2,7 +2,7 @@
 
 This page records validation of the Azure DevOps REST implementation, the
 0.1.0 through 0.3.4 distributions, the release candidates from 0.3.5 to
-0.5.1, the moves to OpenCode 2.3.0, 2.3.2, 2.4.1 and 2.4.2, runs of Martian's public code
+0.5.2, the moves to OpenCode 2.3.0, 2.3.2, 2.4.1 and 2.4.2, runs of Martian's public code
 review benchmark, the instruction
 changes of 0.3.6 measured on it and on ReviewBench, the severity changes
 of 0.3.7 run on ReviewBench's test set, the runs behind the single
@@ -55,7 +55,9 @@ acceptance runs, including the MCP-based runs, are preserved in
   [development runs](#one-pipeline-passes-instead-of-roles-2026-11-22-and-23)
   that the single pipeline rests on; with the release's review stages, the
   same 24 pull requests with one to four passes of GPT-6.2 Sol, all 96
-  reviews COMPLETE.
+  reviews COMPLETE. With the 0.5.2 candidate on OpenCode 2.4.2, a
+  gpt-6-luna review of each of the three test PRs and its preview, all
+  COMPLETE and nothing posted ([with a real model](#with-a-real-model)).
 - **Every release.** Following the [releasing guide](RELEASING.md), the
   candidate is installed from a clean source archive and from its public Git
   commit before it is tagged, and the published npm package is installed from
@@ -86,6 +88,48 @@ The test-PR runs show that the workflow works and what it found on those PRs;
 the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
+
+## 0.5.2 after publication (2026-11-27)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9, OpenCode
+2.4.2 and tmux 3.2a, in isolated OpenCode profiles with the fake model and
+Azure DevOps services, except for the last item.
+
+- **The merged tree.** The pull request was merged with a merge commit
+  (`d9b067d`) whose tree is that of the commit the fifteenth review read
+  (`46d2750`). CI passed on that commit, on `main` and on the tag.
+- **Before the tag.** On `46d2750`: the offline suite passed on a clean
+  export (829 tests), the source archive passed the clean-directory
+  installation check, the package built from a clean export holds 35 files,
+  all 404 local links and images of the 50 Markdown files resolve, and the
+  public Git commit, installed by OpenCode's plugin manager, passed the native
+  smoke, terminal panel and setup fixtures (129 and 221, 47 and 73, none and
+  16 model and Azure DevOps requests).
+- **Source archives.** The release's source archive, downloaded again, is
+  byte-identical to the one built from the tag, and so is GitHub's own archive
+  of the tag. It passed the clean-directory installation check: 23 runtime
+  modules, 6 prompts and the license as in the archive, the view's JSX source
+  not installed, and `--replace` keeping the settings file byte for byte.
+- **The Git package.** `github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.5.2`,
+  installed by OpenCode's plugin manager, passed the native smoke fixture
+  (129 model and 221 Azure DevOps requests), the terminal panel's fixture (47
+  and 73), the setup fixture (no model request, 16 Azure DevOps requests) and
+  the update of 0.4.x settings (none and 7), the counts of 0.5.1.
+- **The npm package.** The registry's integrity and shasum for 0.5.2 equal
+  those of the package built from the tag, which holds the candidate's 35
+  files; the tarball downloaded from the registry is byte-identical to it, and
+  `latest` names 0.5.2. Installed from the registry, the package passed the
+  same four fixtures with the same request counts.
+- **The release notes' upgrade, on one real machine.** Before the run with a
+  real model, the maintainer's machine went from OpenCode 2.4.1 to 2.4.2 with
+  the upgrade commands as the release notes give them (with `sudo` for the
+  global install, after a copy of the database that this upgrade does not
+  need), and after the release from the candidate's Git commit to
+  `opencode-azure-devops-pr-review@0.5.2` with the two plugin commands. One
+  `/pr-check` there, against Azure DevOps Services, was READY with every row
+  `ok`, among them "OpenCode 2.4.2, the tested version" and "Running
+  opencode-azure-devops-pr-review@0.5.2". No model ran and nothing was
+  written to Azure DevOps.
 
 ## 0.5.2 release candidate acceptance (2026-11-27)
 
@@ -173,8 +217,8 @@ package has the files of 0.5.1.
   last message, and the pass FAILED as interrupted (`failure=permanent`; it
   was not tried again, and the review was INCOMPLETE). Where a background
   command of the reviewer (approved by the probe) had ended before the
-  decline and its notice had arrived (the probe waited for the command's end
-  and 1.5 seconds more), OpenCode started the next execution at once, AZPR
+  decline (the probe waited for the command's end and 1.5 seconds more, not
+  for its notice), OpenCode started the next execution at once, AZPR
   let its model request through, refused the turn (`The session has no
   complete, successful final assistant response`, `failure=transient`), and
   the pass was COMPLETE in a new session. Declined with a message, the model
@@ -191,6 +235,63 @@ package has the files of 0.5.1.
   these releases do not report as such, and on 2.3.0 also the background
   summary run with debug on, since 2.3.0 writes no background summary by
   default. This shows no support of every 2.x release.
+
+### Reviews by a second model
+
+The pull request was reviewed by a second model (GPT-6.2 Astra at its highest
+reasoning effort through the Codex CLI 0.171.0, in a read-only sandbox on a
+clean clone), after a review of the design summary before any code. Its
+instructions were the change, its purpose and the host behaviour the change
+relies on, with the source of OpenCode 2.4.1 and 2.4.2, the OpenTUI releases
+they pin and the measured records; not the results of the checks above. The
+first round was two independent reviews of the whole change, the next two
+reviewed the corrections, and from the fourth on each round was a fresh
+review of the whole pull request. They reported 26 points (the two reviews of
+the first round, counted once per cause), 19, 6, 9, 4, 6, 5, 4, 3, 4, 2, 6, 2,
+4 and 2. Every point was checked against the code and, where it concerned the
+host, against OpenCode's source. The code changed after the first two rounds
+and a unit test after the third; from the fourth round on, every correction
+was to comments and documents (the sixth round's finding of a turn without
+its end marker after a declined shell request became a known limitation, by
+the maintainer's decision). Two passages kept drawing points about
+OpenCode's own behaviour, the turn after a declined shell request and a
+prompt taken back; after the eleventh and the fourteenth round each was
+written as a general statement of what is certain. The later rounds found
+nothing wrong in either statement; the fifteenth round's first point
+concerns an aside next to the first one.
+
+The fifteenth round named two points, one of them to be fixed before the
+release: the architecture page said in passing that a shell request asks a
+person with `shell: "inherit"` as with `"ask"`, where with `"inherit"` only a
+command that OpenCode's own rules ask for does. Every place where the setting
+is chosen says that correctly, the runtime does what they say, and the page is
+not part of the npm package, so the point was judged not to hold the release
+back: 0.5.2 was released with that sentence, and the pull request of this
+record corrects it, together with the other point (the decline probe waited
+for the background command's end and 1.5 seconds more, not for its notice).
+
+### With a real model
+
+After the fifteenth review, on the maintainer's machine: OpenCode 2.4.2 as
+the background service, the candidate's commit `46d2750` installed by
+OpenCode's plugin manager from GitHub, and Azure DevOps Services. On three
+test PRs of the maintainer's organization (1, 35 and 316 changed files),
+`/pr-check`, then `/pr-review` with GPT-6 Luna in both passes and the rating
+by the same model, and the preview that `--preview` starts after it; nothing
+was posted.
+
+- Each `/pr-check` was READY with all 12 rows `ok`, among them "OpenCode
+  2.4.2, the tested version" and "Running" the candidate's commit.
+- Each review was COMPLETE with every changed file reviewed in both passes
+  (the 316 files in 13 shards per pass), no session failed, and the
+  duplicate check refused no merge. One shard's answer had a JSON slip that
+  the runtime repaired, which that review lists among its warnings.
+- Each preview was PREVIEW ("Nothing was posted").
+- From `/pr-check` to the preview's receipt the runs took 75 seconds, 55
+  seconds and 5.6 minutes.
+
+This shows that the release runs a review from end to end on the tested host
+with a real model; it says nothing about the findings themselves.
 
 ### Not verified
 
