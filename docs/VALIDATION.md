@@ -6523,20 +6523,20 @@ transient failure, and its error names the last activity.
   request that nobody approves (`shell: "ask"`) stops the stage after
   `workflow.stageIdleSeconds`, in its retry too.
 - **A declined shell request.** With `shell: "ask"` or `"inherit"`, a
-  person can decline a reviewer's shell request. Where the reviewer's step
-  ends because of a decline without a message (OpenCode's full-screen
-  terminal UI and its desktop app give none in a reviewer's session;
-  source), OpenCode records the end of the reviewer's execution as a
-  shutdown, which leaves no idle marker (OpenCode 2.3.0 to the tested
-  version, from the source; measured on 2.4.1 and 2.4.2 with the fake model).
-  The declined step carries OpenCode's error, so AZPR takes no answer of
-  that turn and credits none of its reads to a finding, and the stage goes
-  on as after any failed turn. One case goes beyond a failed turn: where
-  OpenCode's notice that a background command of the reviewer ended arrived
-  after that step began and before the execution ended, OpenCode starts the
-  next execution at once and AZPR counts it to the turn, so its model
-  requests and tool calls run before the turn fails. A decline with a message (`opencode mini` asks for one) is the
-  command's result instead: the reviewer receives the message and goes on.
+  person can decline a shell request of one of AZPR's sessions (a
+  reviewer's, say). A decline without a message (OpenCode's full-screen
+  terminal UI and its desktop app give none in AZPR's sessions; source) ends
+  the step and its execution, and OpenCode records that end as a shutdown,
+  which leaves no idle marker (OpenCode 2.3.0 to the tested version, from
+  the source; measured on 2.4.1 and 2.4.2 with the fake model). AZPR counts
+  a turn to the first idle marker after its prompt, which is then a later
+  execution's, if one comes, and until then what the session does while
+  AZPR waits for it counts to that turn: the model requests and tool calls
+  of whatever execution OpenCode starts in it, and what those calls return
+  (comment planning, for one, can hand it to a later session of the same
+  page). The declined step carries OpenCode's error, so AZPR takes no answer
+  of that turn. A decline with a message (`opencode mini` asks for one) is
+  the command's result instead: the model receives the message and goes on.
   AZPR 0.5.1 behaves the same.
 - **An answer that reaches the model's output limit fails its pass.** OpenCode
   then asks the model to go on, with a message of its own that AZPR takes for

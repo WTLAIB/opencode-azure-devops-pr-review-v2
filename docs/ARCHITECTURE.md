@@ -1064,18 +1064,17 @@ execution's, which can be that later one.
 The host records two ends as a shutdown and leaves no marker for them. Its
 own shutdown ends the run with the process. The other is a known limitation:
 that of a step that ended because a person declined one of its tool calls
-without a message, which only a reviewer's shell request can ask of a person
-(`shell: "ask"` or `"inherit"`; OpenCode's full-screen terminal UI and its
-desktop app decline in a reviewer's session without a message, `opencode
-mini` asks for one). The host has given that step's message an error ("Step
-interrupted"), so AZPR takes no answer of the turn and credits none of its
-reads to a finding, and the stage goes on as after any failed turn. Where
-the host's notice that a background command of the session ended arrived
-after that step began and before the execution ended, the host starts the
-next execution at once and the turn takes it in: its model requests and tool
-calls run while the grant is open, before the turn fails. A decline with a
-message is the command's result instead: the reviewer receives the message
-and goes on.
+without a message (with `shell: "ask"` or `"inherit"` a shell request asks a
+person; OpenCode's full-screen terminal UI and its desktop app decline in
+AZPR's sessions without a message, `opencode mini` asks for one). The first
+marker after the turn's prompt is then a later execution's, if one comes,
+and until then what the session does while the grant is open counts to the
+turn: the model requests and tool calls of whatever execution the host
+starts in it, and what those calls return (comment planning, for one, can
+hand it to a later session of the same page). The host has given the
+declined step's message an error ("Step interrupted"), so AZPR takes no
+answer of that turn. A decline with a message is the command's result
+instead: the model receives the message and goes on.
 
 A grant is open only during a turn: outside it the `context` hook refuses a
 request, the `model.request` hook a request that was prepared earlier, the

@@ -171,13 +171,13 @@ settings, backups and failure records. Never upload `.local/`.
   still fails it. The host records two ends as a shutdown: its own, which
   ends the run with the process, and that of a step that ended because a
   person declined one of its tool calls without a message (shell `ask` or
-  `inherit`), after which the host runs on. The declined step carries the
-  host's error, so no answer of such a turn is taken and none of its reads
-  counts for a finding; where the host's notice that the session's own
-  background command ended arrived after that step began and before the
-  execution ended, the host starts the next execution at once, and its
-  requests and tool calls run as the turn's before the turn fails. A known
-  limitation (docs/VALIDATION.md).
+  `inherit`), after which the host runs on. The first marker after such a
+  turn's prompt is then a later execution's, if one comes, and until then
+  what the session does while the wait for it lasts counts to the turn (the
+  requests and tool calls of whatever the host starts there, and what those
+  return, which comment planning, for one, can hand to a later session of
+  its page); the declined step carries the host's error, so no answer of
+  such a turn is taken. A known limitation (docs/VALIDATION.md).
 - A private session gets a model request, a retry and a tool only while a
   turn of it is open (`open` on the grant). A prompt opens it, and only
   while the call that sent it still waits for that turn (`turn`): one the
