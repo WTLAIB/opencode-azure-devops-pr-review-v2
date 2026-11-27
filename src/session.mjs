@@ -316,10 +316,8 @@ export async function requestReview(context, { sessionID, text, role, model, met
   const indexes = messages.flatMap((message, index) => message?.id === admitted.id ? [index] : []);
   if (indexes.length !== 1) {
     // What is known is only that the prompt is not there exactly once. A person may have taken it back in that
-    // session, in a way that removes it from the session's messages (OpenCode 2.4.2's terminal UI: Esc twice before
-    // the model answered, with an empty prompt box and nothing queued; /undo takes a prompt back and removes it once
-    // another prompt is sent there or a compaction is asked for, or at once while it still waited), or a compaction
-    // may have removed it.
+    // session (OpenCode 2.4.2's terminal UI: Esc twice before the model answered; /undo), which removes it from the
+    // session's messages once OpenCode carries the take-back out, or a compaction may have removed it.
     // Whatever the cause, nothing of this turn is accepted, and it is not retried.
     throw new Error('[AZPR] The admitted prompt is absent or ambiguous in the session context: it is not among the session\'s messages exactly once. It may have been taken back in that session or removed by a compaction. No output of this turn was accepted.');
   }
