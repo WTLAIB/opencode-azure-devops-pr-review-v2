@@ -1064,9 +1064,10 @@ marker recorded, which can be that later execution's.
 The host records two ends as a shutdown and leaves no marker for them. Its
 own shutdown ends the run with the process. The other is a known limitation:
 that of a step that ended because a person declined one of its tool calls
-without a message (with `shell: "ask"` or `"inherit"` a shell request asks a
-person; OpenCode's full-screen terminal UI and its desktop app decline in
-AZPR's sessions without a message, `opencode mini` asks for one). The first
+without a message (with `shell: "ask"`, and with `"inherit"` where OpenCode's
+own rules ask, a shell request can ask a person; OpenCode's full-screen
+terminal UI and its desktop app decline in AZPR's sessions without a
+message, `opencode mini` asks for one). The first
 marker after the turn's prompt is then a later execution's, if one comes,
 and until then what the session does while the grant is open counts to the
 turn: the model requests and tool calls of whatever execution the host
