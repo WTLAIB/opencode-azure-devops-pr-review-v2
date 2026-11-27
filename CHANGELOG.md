@@ -51,9 +51,10 @@ used as they are.
   `"inherit"`, a reviewer's shell request that a person declines without a
   reason fails that reviewer's turn, and OpenCode's full-screen terminal UI
   and desktop app give none in a reviewer's session (`opencode mini` asks for
-  one). OpenCode records the end of the reviewer's execution as
-  a shutdown, which leaves no marker of the turn's end. AZPR takes no answer
-  of that turn, and the stage goes on as after any failed turn. See
+  one, which the reviewer then receives as the command's result). OpenCode
+  records the end of the reviewer's execution as a shutdown, which leaves no
+  marker of the turn's end. AZPR takes no answer of that turn, and the stage
+  goes on as after any failed turn. See
   [debugging](docs/DEBUGGING.md#diagnosis-order) and the
   [validation record](docs/VALIDATION.md#known-limitations).
 

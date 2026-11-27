@@ -169,14 +169,15 @@ settings, backups and failure records. Never upload `.local/`.
   before any answer is the turn's own end, not an earlier execution's. What
   follows the marker is no part of the turn; someone else's message there
   still fails it. The host records two ends as a shutdown: its own, which
-  ends the run with the process, and the end of a step after a person
-  declined one of its tool calls without a message (shell `ask` or
+  ends the run with the process, and that of a step that ended because a
+  person declined one of its tool calls without a message (shell `ask` or
   `inherit`), after which the host runs on. The declined step carries the
   host's error, so no answer of such a turn is taken and none of its reads
-  counts for a finding; where the session's own background command ended in
-  that step, the host starts the next execution at once, and its requests
-  and tool calls run as the turn's before the turn fails. A known limitation
-  (docs/VALIDATION.md).
+  counts for a finding; where the host's notice that the session's own
+  background command ended arrived after that step began and before the
+  execution ended, the host starts the next execution at once, and its
+  requests and tool calls run as the turn's before the turn fails. A known
+  limitation (docs/VALIDATION.md).
 - A private session gets a model request, a retry and a tool only while a
   turn of it is open (`open` on the grant). A prompt opens it, and only
   while the call that sent it still waits for that turn (`turn`): one the

@@ -167,21 +167,19 @@ package has the files of 0.5.1.
 - **A declined shell request.** A probe written for this release
   (`decline`, `shell: "ask"`, one pass) declined a reviewer's shell request
   through OpenCode's permission route, with the commit `cb509a7` on 2.4.2 and
-  2.4.1 and with 0.5.1 on 2.4.2. Declined without a message, the reviewer's
-  execution ended with no idle marker and with OpenCode's error ("Step
-  interrupted") on its last message, and the pass FAILED as interrupted
-  (`failure=permanent`; it was not tried again, and the review was
-  INCOMPLETE). Where a background command that the reviewer had started (the
-  probe approved it) ended before the decline, OpenCode started the next
-  execution at once, AZPR let its model request through, refused the turn
-  (`The session has no complete, successful final assistant response`,
-  `failure=transient`), and the pass was COMPLETE in a new session. Declined
-  with a message (through the permission route; of OpenCode's clients,
-  `opencode mini` sends one where the person writes one, the full-screen
-  terminal UI and the desktop app none in such a session), the command
-  failed, the reviewer went on, and the pass was COMPLETE. In each case the
-  declined turn was the pass's first. The same in all three; see
-  [Known limitations](#known-limitations).
+  2.4.1 and with 0.5.1 on 2.4.2; in each case the declined turn was the
+  pass's first. Declined without a message, the reviewer's execution ended
+  with no idle marker and with OpenCode's error ("Step interrupted") on its
+  last message, and the pass FAILED as interrupted (`failure=permanent`; it
+  was not tried again, and the review was INCOMPLETE). Where a background
+  command of the reviewer (approved by the probe) had ended before the
+  decline and its notice had arrived (the probe waited for the command's end
+  and 1.5 seconds more), OpenCode started the next execution at once, AZPR
+  let its model request through, refused the turn (`The session has no
+  complete, successful final assistant response`, `failure=transient`), and
+  the pass was COMPLETE in a new session. Declined with a message, the model
+  received the message as the command's result, went on, and the pass was
+  COMPLETE. The same in all three; see [Known limitations](#known-limitations).
 - **Another OpenCode.** The candidate unchanged, on OpenCode 2.4.1: `/pr-check`
   READY with every row `ok`, the OpenCode row "OpenCode 2.4.1. Note: AZPR is
   tested with 2.4.2. Reviews run on an OpenCode V2 host that provides what
@@ -6525,29 +6523,21 @@ transient failure, and its error names the last activity.
   request that nobody approves (`shell: "ask"`) stops the stage after
   `workflow.stageIdleSeconds`, in its retry too.
 - **A declined shell request.** With `shell: "ask"` or `"inherit"`, a
-  person can decline a reviewer's shell request. OpenCode's full-screen
-  terminal UI and its desktop app send that decline without a message (the
-  full-screen terminal UI asks for one only in a session that has a parent,
-  and AZPR's sessions have none; `opencode mini` asks for one in any session;
-  source). Declined without one, OpenCode ends the reviewer's execution and
-  records that end as a shutdown, which leaves no idle marker (OpenCode 2.3.0
-  to the tested version, from the source; measured on 2.4.1 and 2.4.2 with
-  the fake model).
+  person can decline a reviewer's shell request. Where the reviewer's step
+  ends because of a decline without a message (OpenCode's full-screen
+  terminal UI and its desktop app give none in a reviewer's session;
+  source), OpenCode records the end of the reviewer's execution as a
+  shutdown, which leaves no idle marker (OpenCode 2.3.0 to the tested
+  version, from the source; measured on 2.4.1 and 2.4.2 with the fake model).
   The declined step carries OpenCode's error, so AZPR takes no answer of
-  that turn and credits none of its reads to a finding; the turn fails as
-  interrupted (`terminal=missing-idle` and `finish=error` in the stage
-  error). Where a command that the reviewer had started in the background
-  ended during that step, OpenCode starts the next execution at once; AZPR
-  takes it for the turn's, so its model requests and tool calls run, and the
-  turn fails by how that execution ends (as an incomplete answer where it
-  succeeds). The pass then follows the stage's rules for a failed turn: a
-  first turn that failed as interrupted ends it, an incomplete answer is
-  tried again in a new session as far as `workflow.stageRetries` allows, and
-  a failed correction or follow-up turn leaves the stage's latest usable
-  answer standing. A decline with a message (from `opencode mini`, or
-  through OpenCode's permission route) lets the reviewer go on: the command
-  fails with that message. Where reviewers should run no commands, keep
-  `shell: "deny"`. AZPR 0.5.1 behaves the same.
+  that turn and credits none of its reads to a finding, and the stage goes
+  on as after any failed turn. One case goes beyond a failed turn: where
+  OpenCode's notice that a background command of the reviewer ended arrived
+  after that step began and before the execution ended, OpenCode starts the
+  next execution at once and AZPR counts it to the turn, so its model
+  requests and tool calls run before the turn fails. A decline with a message (`opencode mini` asks for one) is the
+  command's result instead: the reviewer receives the message and goes on.
+  AZPR 0.5.1 behaves the same.
 - **An answer that reaches the model's output limit fails its pass.** OpenCode
   then asks the model to go on, with a message of its own that AZPR takes for
   someone else's: both sessions of the pass fail, and the receipt speaks of

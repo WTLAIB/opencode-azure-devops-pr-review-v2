@@ -1063,24 +1063,19 @@ execution's, which can be that later one.
 
 The host records two ends as a shutdown and leaves no marker for them. Its
 own shutdown ends the run with the process. The other is a known limitation:
-a step ends that way when a person declines one of its tool calls without a
-message, which only a reviewer's shell request can ask of a person
-(`shell: "ask"` or `"inherit"`), and OpenCode's full-screen terminal UI and
-its desktop app send a decline in a reviewer's session without one (the
-full-screen terminal UI asks for a message only in a session that has a
-parent; `opencode mini` asks for one in any session). The host has given that
-step's message an error ("Step interrupted"), so AZPR takes no answer of the
-turn and credits none of its reads to a finding. Where no execution follows,
-the turn fails as interrupted. Where a background command of the session
-ended during that step, the host starts the next execution at once, the turn
-takes it in (its model requests and tool calls run while the grant is open),
-and the turn fails by how that execution ends: as an incomplete answer where
-it succeeds. The stage then goes on by its usual rules: a first turn that
-failed as interrupted ends the pass, an incomplete answer is tried again in a
-new session as far as `workflow.stageRetries` allows, and a correction or
-follow-up turn that failed leaves the latest usable answer standing. A
-decline with a message (from `opencode mini`, or through the permission
-route) is a tool error the reviewer goes on from.
+that of a step that ended because a person declined one of its tool calls
+without a message, which only a reviewer's shell request can ask of a person
+(`shell: "ask"` or `"inherit"`; OpenCode's full-screen terminal UI and its
+desktop app decline in a reviewer's session without a message, `opencode
+mini` asks for one). The host has given that step's message an error ("Step
+interrupted"), so AZPR takes no answer of the turn and credits none of its
+reads to a finding, and the stage goes on as after any failed turn. Where
+the host's notice that a background command of the session ended arrived
+after that step began and before the execution ended, the host starts the
+next execution at once and the turn takes it in: its model requests and tool
+calls run while the grant is open, before the turn fails. A decline with a
+message is the command's result instead: the reviewer receives the message
+and goes on.
 
 A grant is open only during a turn: outside it the `context` hook refuses a
 request, the `model.request` hook a request that was prepared earlier, the
