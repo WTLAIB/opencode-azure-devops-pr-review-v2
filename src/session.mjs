@@ -275,8 +275,9 @@ export function classifyFailure(error) {
  * the session only in the execution that takes it, and an execution leaves one marker when it ends, unless the
  * host records that end as a shutdown (`turnState` in host.mjs says when), so that marker is the end of the
  * execution that had the prompt, and says how the turn ended. The turn's answer is the last assistant message
- * before it. A step that a person's decline ended carries the host's error, so such a turn fails either way: as
- * interrupted where no marker follows, and as an incomplete answer where a later execution left one.
+ * before it. A step that a person's decline ended carries the host's error, so no answer of such a turn is taken:
+ * where no marker follows, it fails as interrupted; where a later execution left one, by how that execution ended
+ * (as an incomplete answer where it succeeded).
  *
  * Two kinds of messages the host writes by itself are no one else's input and no step of the turn. What it
  * wrote of instructions (`hostInstructions`): its updates, and the instruction files it loaded after a native

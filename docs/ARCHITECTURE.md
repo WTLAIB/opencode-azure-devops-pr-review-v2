@@ -1065,14 +1065,21 @@ The host records two ends as a shutdown and leaves no marker for them. Its
 own shutdown ends the run with the process. The other is a known limitation:
 a step ends that way when a person declines one of its tool calls without a
 message, which only a reviewer's shell request can ask of a person
-(`shell: "ask"` or `"inherit"`). The host has given that step's message an
-error ("Step interrupted"), so AZPR accepts nothing of the turn: where no
-execution follows, the turn fails as interrupted and the pass is not tried
-again; where a background command of the session ended during that step,
-the host starts the next execution at once, the turn takes it in (its model
-requests and tool calls run while the grant is open), and the turn then fails
-as an incomplete answer, so that the pass is tried once more in a new
-session. A decline with a message is a tool error the reviewer goes on from.
+(`shell: "ask"` or `"inherit"`), and OpenCode's terminal UI and desktop app
+send a decline in a reviewer's session without one (the terminal UI asks for
+a message only in a session that has a parent). The host has given that
+step's message an error ("Step interrupted"), so AZPR takes no answer of the
+turn and credits none of its reads to a finding. Where no execution follows,
+the turn fails as interrupted. Where a background command of the session
+ended during that step, the host starts the next execution at once, the turn
+takes it in (its model requests and tool calls run while the grant is open),
+and the turn fails by how that execution ends: as an incomplete answer where
+it succeeds. The stage then goes on by its usual rules: a first turn that
+failed as interrupted ends the pass, an incomplete answer is tried again in a
+new session as far as `workflow.stageRetries` allows, and a correction or
+follow-up turn that failed leaves the latest usable answer standing. A
+decline with a message, which OpenCode's permission route accepts, is a tool
+error the reviewer goes on from.
 
 A grant is open only during a turn: outside it the `context` hook refuses a
 request, the `model.request` hook a request that was prepared earlier, the

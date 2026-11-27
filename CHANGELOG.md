@@ -48,13 +48,11 @@ used as they are.
   offered neither, as before; the host fixture now also checks every private
   request of its run for their names.
 - Now documented (0.5.1 behaves the same): with `shell: "ask"` or
-  `"inherit"`, a reviewer's shell request that a person declines without a
-  message ends that review pass. OpenCode records the end of the reviewer's
-  execution as a shutdown, which leaves no marker of the turn's end, and AZPR
-  accepts nothing of that turn: the pass is not tried again, or is tried once
-  more in a new session where a command that the reviewer had started in the
-  background ended before the decline. Declining with a message lets the
-  reviewer go on. See
+  `"inherit"`, a reviewer's shell request that a person declines fails that
+  reviewer's turn; OpenCode's terminal UI and desktop app send such a decline
+  without a message. OpenCode records the end of the reviewer's execution as
+  a shutdown, which leaves no marker of the turn's end. AZPR takes no answer
+  of that turn, and the stage goes on as after any failed turn. See
   [debugging](docs/DEBUGGING.md#diagnosis-order) and the
   [validation record](docs/VALIDATION.md#known-limitations).
 
