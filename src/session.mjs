@@ -272,10 +272,11 @@ export function classifyFailure(error) {
  * session: only the turn after this admitted prompt is examined.
  *
  * A turn is the admitted prompt and what follows it up to the first idle marker. A prompt becomes a message of
- * the session only in the execution that takes it, and an execution leaves one marker when it ends, however it
- * ends while the host runs (OpenCode 2.3.0 to the tested version; a shutdown of the host leaves none, and ends the
- * run with the process), so that marker is the end of the execution that had the prompt, and says how the turn
- * ended. The turn's answer is the last assistant message before it.
+ * the session only in the execution that takes it, and an execution leaves one marker when it ends, unless the
+ * host records that end as a shutdown (`turnState` in host.mjs says when), so that marker is the end of the
+ * execution that had the prompt, and says how the turn ended. The turn's answer is the last assistant message
+ * before it. A step that a person's decline ended carries the host's error, so such a turn fails either way: as
+ * interrupted where no marker follows, and as an incomplete answer where a later execution left one.
  *
  * Two kinds of messages the host writes by itself are no one else's input and no step of the turn. What it
  * wrote of instructions (`hostInstructions`): its updates, and the instruction files it loaded after a native

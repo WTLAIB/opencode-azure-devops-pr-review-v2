@@ -93,9 +93,10 @@ Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9 and tmux
 3.2a; OpenCode CLI 2.4.2, 2.4.1, 2.4.0, 2.3.2 and 2.3.0 in disposable
 prefixes, with isolated OpenCode profiles and the fake model and Azure DevOps
 services. The host runs below were made on the candidate's commit
-`a74b82f`, and the two commits before it, `d52d209` and `a4b7c50`, gave the
-same results; the commits after `a74b82f` change only a unit test, comments
-and documents, and the offline checks were run on the last of them.
+`a74b82f` (the probe of a declined request on `cb509a7`), and the two commits
+before it, `d52d209` and `a4b7c50`, gave the same results; the commits after
+`a74b82f` change only a unit test, comments and documents, and the offline
+checks were run on the last of them.
 
 0.5.2 moves the tested host to OpenCode 2.4.2 after the
 [comparison with 2.4.1](#opencode-242-compared-with-241-2026-11-27). Its
@@ -163,6 +164,20 @@ package has the files of 0.5.1.
   (`refusedOutsideTurn`; the probe calls it `refusedAfterTurn`); six more
   runs of that case on both hosts had none, and the stage was COMPLETE each
   time. The take-back probe gave the results of the comparison of the hosts.
+- **A declined shell request.** A probe written for this release
+  (`decline`, `shell: "ask"`, one pass) declined a reviewer's shell request
+  through OpenCode's permission route, with the commit `cb509a7` on 2.4.2 and
+  2.4.1 and with 0.5.1 on 2.4.2. Declined without a message, the reviewer's
+  execution ended with no idle marker and with OpenCode's error ("Step
+  interrupted") on its last message, and the pass FAILED as interrupted
+  (`failure=permanent`; it was not tried again, and the review was
+  INCOMPLETE). Where a background command that the reviewer had started (the
+  probe approved it) ended before the decline, OpenCode started the next
+  execution at once, AZPR let its model request through, refused the turn
+  (`The session has no complete, successful final assistant response`,
+  `failure=transient`), and the pass was COMPLETE in a new session. Declined
+  with a message, the command failed, the reviewer went on, and the pass was
+  COMPLETE. The same in all three; see [Known limitations](#known-limitations).
 - **Another OpenCode.** The candidate unchanged, on OpenCode 2.4.1: `/pr-check`
   READY with every row `ok`, the OpenCode row "OpenCode 2.4.1. Note: AZPR is
   tested with 2.4.2. Reviews run on an OpenCode V2 host that provides what
@@ -215,7 +230,7 @@ run on is in [its acceptance](#052-release-candidate-acceptance-2026-11-27).
 | Background summary | In the background-summary fixture AZPR refused the summaries the host asked for in the session of the reviewer that completed: one per run on 2.4.0 and 2.4.1 (also in the ten runs of the 0.5.1 acceptance), two per run on 2.4.2 (two runs), as on 2.3.2. The fixture counts that session's refusals, not when the host asked. No request reached the model, and the review was COMPLETE. The change was not traced to a single commit. |
 | A prompt taken back | The terminal UI of 2.4.2 takes the last prompt back on Esc pressed twice within five seconds before the model answered, where the prompt box is empty and nothing is queued (source): it interrupts the session, waits for it, and takes the prompt back with the two routes `/undo` uses, at once, so the prompt is gone from the session's messages. `/undo` itself (2.4.1 and 2.4.2) only marks the prompt as taken back, and it is removed when the next prompt is sent in that session, or at once while it still waited (source). Measured on 2.4.1 and 2.4.2 by calling the routes of the double Esc in that order in a reviewer's session (`probe-undo`), against a plain interrupt: AZPR read the session before the prompt was gone, so the pass FAILED as interrupted (`failure=permanent`) in all four runs, with the same receipts and stage records. The other order, the prompt gone before AZPR reads the session, was not produced: the turn then fails as well, with the error that 0.5.2 rewords. The key presses themselves were not sent in a real terminal UI. |
 | Phone notifications | New in 2.4.2 (source, `packages/core/src/push/`): OpenCode's mobile app registers a phone, and OpenCode sends it a notice through OpenCode's own relay when a top-level session's execution ends ("Finished" after one that succeeded with a model step, "Failed" after one that failed, none after an interrupted one), when a model asks a question and when a permission is requested. A phone newly registered without settings gets everything (`all`; a registration renewed without settings keeps the phone's earlier settings); `attention` keeps only questions and permission requests, and a session can be muted. AZPR's private sessions are top-level sessions, so one review can send a notice for each of them. The server's plugin interface has no access to these settings; a terminal UI plugin's client does (`experimental.push`), and AZPR's terminal part leaves them alone. Not measured: the host accepts only two relay addresses of OpenCode's own, so a local receiver could not register. |
-| Permissions and tool visibility | 2.4.2 evaluates permissions with a new policy (source): the last matching rule still decides a call, and a tool is left out of a request when the host can establish that every outcome of its action is a denial, a conservative check that can keep a tool listed whose every call is denied. AZPR's rules hide the same tools under both readings; measured, each private reviewer is offered exactly its allowlist, and a call is refused where it is made, as before. |
+| Permissions and tool visibility | 2.4.2 evaluates permissions with a new policy (source): as before, the last matching rule decides for each resource of a call, and a call with several resources (a compound shell command, say) is denied where one of them is denied and asks where one asks; new, a tool is left out of a request when the host can establish that every outcome of its action is a denial, a conservative check that can keep a tool listed whose every call is denied. AZPR's rules hide the same tools under both readings; measured, each private reviewer is offered exactly its allowlist, and a call is refused where it is made, as before. |
 | Plugin interface | The session methods, message types, hooks and events AZPR uses, the error of a missing session, the plugin list and the registration of commands and agents are unchanged (source). New: the Promise adapter's calls of the host's endpoints honour a `signal` in an options object given as their second argument (`{ signal }`; the plugin RPC adapter already did); AZPR passes none. An agent can carry `instructions`, which become an instruction source of their own; AZPR's roles carry none, and such a source would be left out of private requests like the other sources of a conversation's place. |
 | Experimental flags | A session working directory with a `cd` tool and its own instruction files (`machines`), skills loaded from MCP servers (`mcp_skills`) and a compaction record of subagents and background work (`compaction_jobs`) are off in release builds (source); not run. |
 | Terminal UI | The JavaScript with which OpenTUI 0.9.9 handles the mouse is the same as in 0.9.4, and the dialog interface plugins use is unchanged (source). Its native input parser now delivers a release that a terminal reports as button 3 while a button is held, which 0.9.4 dropped (source; a terminal that reports so, ConEmu for one, was not tried). Measured on 2.4.2: the panel fixture (2 runs) and the setup fixture (4 runs, the confirmed update of 0.4.x settings among them) as on 2.4.1, and the `click` control above. OpenTUI 0.9.4 to 0.9.8 could crash while laying out a Markdown list (upstream issue 65766), fixed in 0.9.9; whether the panel's documents could reach that path was not established. |
@@ -230,7 +245,7 @@ above; "source" the reading of both tags):
 | A request's instruction part, built from sources kept as `{ key, text }` and joined with a blank line; what the host adds for a conversation's place to every request | `ca` probe; `parts` and `form` controls; the request comparison |
 | The message the host leaves after a native read beside an instruction file, and the files its metadata names | `n1` probe; `hide` control |
 | The host's update of an instruction source, a `system` message | `upd` probe |
-| The prompt among the session's messages with its nonce, from the execution that takes it; one idle marker per execution while the host runs (a shutdown leaves none, and the run ends with the process) | `turn-end` probe; `look` control; source for the shutdown |
+| The prompt among the session's messages with its nonce, from the execution that takes it; one idle marker per execution, but none for an end the host records as a shutdown: its own, and the end of a step after a person declined one of its tool calls without a message | `turn-end` probe; `look` control; source for the shutdown; the `decline` probe (2.4.1 and 2.4.2) for the declined step |
 | The notice that a background command ended, with the shell's ID and state | `shell` probe |
 | A session's messages in a request: every user message with the ID of the stored one | source (`packages/core/src/session/runner/to-llm-message.ts` builds each user, synthetic and skill message with its stored ID before the hooks run); `hide` control, for the ID of a load |
 | The native read returns at most 2,000 characters of a line | `rows` control |
@@ -6505,6 +6520,20 @@ transient failure, and its error names the last activity.
   the state of the session that keeps the report when it was the last one. A
   request that nobody approves (`shell: "ask"`) stops the stage after
   `workflow.stageIdleSeconds`, in its retry too.
+- **A shell request declined without a message.** With `shell: "ask"` or
+  `"inherit"`, a person can decline a reviewer's shell request. Declined with
+  a message, the command fails and the reviewer goes on. Declined without
+  one, OpenCode ends the reviewer's execution and records that end as a
+  shutdown, which leaves no idle marker (OpenCode 2.3.0 to the tested
+  version, from the source; measured on 2.4.1 and 2.4.2 with the fake model).
+  AZPR accepts nothing of that turn, since the declined step carries
+  OpenCode's error: the pass fails as interrupted and is not tried again
+  (`terminal=missing-idle` and `finish=error` in its stage error). Where a
+  command that the reviewer had started in the background ended during that
+  step, OpenCode starts the next execution at once; AZPR takes it for the
+  turn's, so its model requests and tool calls run, then refuses the turn's
+  answer and tries the pass once more in a new session. AZPR 0.5.1 behaves
+  the same.
 - **An answer that reaches the model's output limit fails its pass.** OpenCode
   then asks the model to go on, with a message of its own that AZPR takes for
   someone else's: both sessions of the pass fail, and the receipt speaks of

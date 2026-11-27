@@ -47,6 +47,16 @@ used as they are.
   Code Mode tools instead of tools of their own. Private sessions are
   offered neither, as before; the host fixture now also checks every private
   request of its run for their names.
+- Now documented (0.5.1 behaves the same): with `shell: "ask"` or
+  `"inherit"`, a reviewer's shell request that a person declines without a
+  message ends that review pass. OpenCode records the end of the reviewer's
+  execution as a shutdown, which leaves no marker of the turn's end, and AZPR
+  accepts nothing of that turn: the pass is not tried again, or is tried once
+  more in a new session where a command that the reviewer had started in the
+  background ended before the decline. Declining with a message lets the
+  reviewer go on. See
+  [debugging](docs/DEBUGGING.md#diagnosis-order) and the
+  [validation record](docs/VALIDATION.md#known-limitations).
 
 OpenCode 2.4.2 adds no database migration to 2.4.1, so going back to 2.4.1
 needs no restored database. AZPR 0.5.1 also runs on 2.4.2 (with the OpenCode

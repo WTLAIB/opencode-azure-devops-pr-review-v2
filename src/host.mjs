@@ -124,9 +124,10 @@ export function pluginSourceLabel(source) {
 /**
  * Session events that show a turn progressing while no hook runs. OpenCode 2.3.0 to the tested version (2.0.0 too)
  * publish the answer text and reasoning a model streams as delta events, what is pending every 100 ms and when a
- * part ends, and of a tool call's input only its start and its end (source); the projected session context shows
- * a text part only once that part has ended. So a model that streams nothing but one tool call's input for longer
- * than a stage's idle window shows no progress meanwhile; AZPR's tools take short arguments.
+ * part ends, and of a tool call's input only its start and its end (source); the projected session context has a
+ * text part from its start, with an empty text, and its text only once that part has ended. So a model that
+ * streams nothing but one tool call's input for longer than a stage's idle window shows no progress meanwhile;
+ * AZPR's tools take short arguments.
  */
 const PROGRESS_EVENTS = new Map([
   ...['started', 'delta', 'ended'].map(phase => [`session.text.${phase}`, 'model output was streamed']),
@@ -595,9 +596,12 @@ export function promptOf(messages, nonce) {
 
 /**
  * Where a turn stands, by the session's own messages: `before` while the turn's prompt is not among them,
- * `running` while no idle marker follows it, and `ended` once one does (an execution leaves one marker when it
- * ends, however it ends while the host runs, before the host starts another one; OpenCode 2.3.0 to the tested version.
- * A shutdown of the host leaves none, and the run has ended with the process).
+ * `running` while no idle marker follows it, and `ended` once one does. An execution leaves one marker when it
+ * ends, before the host starts another one, except where the host records that end as a shutdown: its own
+ * shutdown, which ends the run with the process, and the end of a step after a person declined one of its tool
+ * calls without a message, since the host records an interrupt that nobody asked for as a shutdown (OpenCode
+ * 2.3.0 to the tested version). After such a decline the turn stays `running` until a later execution leaves a
+ * marker, a known limitation (docs/VALIDATION.md#known-limitations); `requestReview` accepts no answer of it.
  */
 export function turnState(messages, prompt) {
   const at = prompt ? messages.indexOf(prompt) : -1;

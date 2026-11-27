@@ -1053,13 +1053,26 @@ follows how OpenCode 2.3.0 to the tested version run a session. A prompt that is
 admitted waits in the session's inbox and becomes a message only in the
 execution that takes it. An execution is one busy period: it goes on while
 input reaches the session, and leaves one marker when it ends, however it
-ends while the host runs (a shutdown leaves none, and ends the run with the
-process). So the first marker after the prompt is the end of the execution that
-had the prompt, also where the model never answered (the turn was interrupted
-or failed), and what another execution wrote after it is not the turn's: a
-command that ended later woke the session, and neither what the host wrote
-then nor how that ended changes the answer. The session's own outcome is its
-latest execution's, which can be that later one.
+ends, unless the host records that end as a shutdown (below). So the first
+marker after the prompt is the end of the execution that had the prompt, also
+where the model never answered (the turn was interrupted or failed), and what
+another execution wrote after it is not the turn's: a command that ended
+later woke the session, and neither what the host wrote then nor how that
+ended changes the answer. The session's own outcome is its latest
+execution's, which can be that later one.
+
+The host records two ends as a shutdown and leaves no marker for them. Its
+own shutdown ends the run with the process. The other is a known limitation:
+a step ends that way when a person declines one of its tool calls without a
+message, which only a reviewer's shell request can ask of a person
+(`shell: "ask"` or `"inherit"`). The host has given that step's message an
+error ("Step interrupted"), so AZPR accepts nothing of the turn: where no
+execution follows, the turn fails as interrupted and the pass is not tried
+again; where a background command of the session ended during that step,
+the host starts the next execution at once, the turn takes it in (its model
+requests and tool calls run while the grant is open), and the turn then fails
+as an incomplete answer, so that the pass is tried once more in a new
+session. A decline with a message is a tool error the reviewer goes on from.
 
 A grant is open only during a turn: outside it the `context` hook refuses a
 request, the `model.request` hook a request that was prepared earlier, the

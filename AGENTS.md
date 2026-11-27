@@ -162,13 +162,19 @@ settings, backups and failure records. Never upload `.local/`.
 - A turn is the admitted prompt up to the first idle marker after it, and
   its answer is the last assistant message before that marker. A prompt
   becomes a message of the session only in the execution that takes it, and
-  an execution leaves one marker however it ends while the host runs (a
-  shutdown leaves none, and ends the run with the process), so that marker is
-  the end of the execution that had the prompt and says how the turn ended; the
-  session's own outcome is its latest execution's, which can be a later one.
-  Never skip a marker: one before any answer is the turn's own end, not an
-  earlier execution's. What follows the marker is no part of the turn;
-  someone else's message there still fails it.
+  an execution leaves one marker however it ends, unless the host records
+  that end as a shutdown, so that marker is the end of the execution that had
+  the prompt and says how the turn ended; the session's own outcome is its
+  latest execution's, which can be a later one. Never skip a marker: one
+  before any answer is the turn's own end, not an earlier execution's. What
+  follows the marker is no part of the turn; someone else's message there
+  still fails it. The host records two ends as a shutdown: its own, which
+  ends the run with the process, and the end of a step after a person
+  declined one of its tool calls without a message (shell `ask` or
+  `inherit`), after which the host runs on. Such a turn fails by the declined
+  step's error; where the session's own background command ended in that
+  step, the host starts the next execution at once, and its requests run as
+  the turn's before the turn fails. A known limitation (docs/VALIDATION.md).
 - A private session gets a model request, a retry and a tool only while a
   turn of it is open (`open` on the grant). A prompt opens it, and only
   while the call that sent it still waits for that turn (`turn`): one the
