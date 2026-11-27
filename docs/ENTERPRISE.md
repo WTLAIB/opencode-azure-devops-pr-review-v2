@@ -357,8 +357,9 @@ Set up the first before `opencode plugin add`:
   app, through OpenCode's own relay. Only with a paired phone, the background
   service sends each notice there, sealed for that phone: the session's
   title and what the notice is about (a run that ended, a question, a
-  permission request), and for a permission request what it asks for, such
-  as a reviewer's shell command under `shell: "ask"`. AZPR's `azure.proxy`
+  permission request), for a question its text (AZPR's private sessions ask
+  none), and for a permission request what it asks for, such as a
+  reviewer's shell command under `shell: "ask"`. AZPR's `azure.proxy`
   and `azure.caFile` do not apply to it, and AZPR leaves the phone's settings
   alone (see [phone notifications](VALIDATION.md#known-limitations)).
 

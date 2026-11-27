@@ -164,9 +164,10 @@ settings, backups and failure records. Never upload `.local/`.
   becomes a message of the session only in the execution that takes it, and
   an execution leaves one marker however it ends, unless the host records
   that end as a shutdown, so that marker is the end of the execution that had
-  the prompt and says how the turn ended; the session's own outcome is its
-  latest execution's, which can be a later one. Never skip a marker: one
-  before any answer is the turn's own end, not an earlier execution's. What
+  the prompt and says how the turn ended; the session's own outcome is the
+  one its latest marker recorded, which can be a later execution's. Never
+  skip a marker: one before any answer is the turn's own end, not an
+  earlier execution's. What
   follows the marker is no part of the turn; someone else's message there
   still fails it. The host records two ends as a shutdown: its own, which
   ends the run with the process, and that of a step that ended because a

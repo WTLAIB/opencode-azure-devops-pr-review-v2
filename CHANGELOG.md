@@ -52,10 +52,10 @@ used as they are.
   that a person declines without a reason fails that session's turn, and
   OpenCode's full-screen terminal UI and desktop app give none in AZPR's
   sessions (`opencode mini` asks for one, which the model then receives as
-  the command's result). OpenCode records the end of that execution as a
-  shutdown, which leaves no marker of the turn's end, so what the session
-  does until a later marker, while AZPR waits for it, counts to that turn;
-  AZPR takes no answer of it. See
+  the command's result). Where the decline ends the step, OpenCode records
+  the end of that execution as a shutdown, which leaves no marker of the
+  turn's end, so what the session does until a later marker, while AZPR
+  waits for it, counts to that turn; AZPR takes no answer of it. See
   [debugging](docs/DEBUGGING.md#diagnosis-order) and the
   [validation record](docs/VALIDATION.md#known-limitations).
 

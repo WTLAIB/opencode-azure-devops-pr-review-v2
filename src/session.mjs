@@ -357,8 +357,8 @@ export async function requestReview(context, { sessionID, text, role, model, met
   const assistants = turn.filter(message => message?.type === 'assistant');
   const final = assistants.at(-1);
   const answer = final && Array.isArray(final.content) ? normalizeAnswer(final, sessionID) : undefined;
-  // The turn's own marker says how it ended. The session's outcome is that of its latest execution, which can be a
-  // later one: it only describes a turn that has no marker.
+  // The turn's own marker says how it ended. The session's outcome is the one its latest marker recorded, which can
+  // be a later execution's, or an earlier one's where no marker follows the prompt (an end recorded as a shutdown).
   const marked = end >= 0;
   if (terminal?.type !== 'idle' || terminal.outcome !== 'succeeded') {
     const outcome = value => ['succeeded', 'failed', 'interrupted'].includes(value) ? value : 'unknown';

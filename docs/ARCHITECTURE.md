@@ -1058,8 +1058,8 @@ marker after the prompt is the end of the execution that had the prompt, also
 where the model never answered (the turn was interrupted or failed), and what
 another execution wrote after it is not the turn's: a command that ended
 later woke the session, and neither what the host wrote then nor how that
-ended changes the answer. The session's own outcome is its latest
-execution's, which can be that later one.
+ended changes the answer. The session's own outcome is the one its latest
+marker recorded, which can be that later execution's.
 
 The host records two ends as a shutdown and leaves no marker for them. Its
 own shutdown ends the run with the process. The other is a known limitation:
