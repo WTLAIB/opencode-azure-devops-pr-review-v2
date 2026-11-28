@@ -63,10 +63,11 @@ hashes together with the validation notes. Add a focused regression test
 when fixing behavior, and update the relevant documentation when it changes.
 
 Changes to hooks, sessions, tools, Azure access or publication also need the
-first eight host fixture runs below; changes to the terminal panel, or to the
-text of notices and receipts, which the panel reads, need the two
-`host-v2-tui-panel` runs, and changes to setup, the terminal part or the
-settings path the four `host-v2-tui-setup` runs. Install the tested host into a disposable local directory
+first eight host fixture runs below. Changes to package entry points,
+first-run setup or the settings path need the `--native` smoke run; changes
+to the terminal panel, or to the text of notices and receipts, which the
+panel reads, the two `host-v2-tui-panel` runs; and changes to setup, the
+terminal part or the settings path the four `host-v2-tui-setup` runs. Install the tested host into a disposable local directory
 without changing your everyday OpenCode installation:
 
 ```sh

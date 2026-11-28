@@ -281,6 +281,15 @@ test('a turn ends at a step the host interrupted or a person declined, whatever 
   // interrupted after it does not stand in for that marker.
   const { context: next } = host({ context: async () => [{ id: 'msg_first', type: 'user', text: 'first' }, step, prompt, assistant(), idle()] });
   await assert.rejects(requestReview(next, { sessionID, text: input, since: 'msg_first' }), /The turn before this one is no longer where the session's messages had it/);
+  // Where the turn before is no longer there (taken back, say), a turn that such a step ended fails by its own
+  // outcome first: as interrupted, not as a changed context that would be tried again.
+  for (const shape of [step, mixed]) {
+    const { context: gone } = host({ context: async () => [prompt, shape] });
+    await assert.rejects(requestReview(gone, { sessionID, text: input, since: 'msg_taken_back' }), error => {
+      assert.deepEqual([error.execution?.terminalOutcome, error.contextChanged, classifyFailure(error)], ['interrupted', undefined, 'permanent']);
+      return true;
+    });
+  }
 });
 
 test('the caller is told that the session is idle before its context is read', async () => {

@@ -23,12 +23,13 @@ setting is new, and settings and saved reviews are used as they are.
   where another error came first in that step, the declined call carries
   OpenCode's decline. Nothing OpenCode starts in that session afterwards gets
   a model request, a retry or a tool, and the turn fails as interrupted
-  (`failure=permanent`) and is not tried in a new session: a reviewer's first
-  turn fails its pass, as it already did when nothing woke the session, and a
-  correction or follow-up turn leaves the answer before it standing. The stage
-  line says `terminal=interrupted` (it said `terminal=missing-idle`), also
-  where a marker follows the step, which may be a later execution's. A decline
-  with a message still lets the session go on.
+  (`failure=permanent`) and is not tried in a new session. A reviewer's first
+  turn fails its pass, as it already did when nothing woke the session, and its
+  stage line says `terminal=interrupted` (for a plain decline it said
+  `terminal=missing-idle`), also where a marker follows the step, which may be
+  a later execution's; after a correction or follow-up turn, the latest usable
+  answer stands where there is one, and the stage line names that turn's
+  failure. A decline with a message still lets the session go on.
 - **A host fixture for declined requests.** `tests/host-v2-decline.mjs` runs
   four reviews on the real host with a fake model (a request declined without
   a message; one declined after a background command ended; the same where the

@@ -162,13 +162,16 @@ settings, backups and failure records. Never upload `.local/`.
 - A turn is the admitted prompt up to the end of the execution that took
   it, and its answer is the last assistant message before that end. A prompt
   becomes a message of the session only in the execution that takes it, and
-  an execution ends at the first of these (`endsExecution` in `host.mjs`):
-  the idle marker it leaves, or a step the host ended by an interrupt. Such a
-  step's message carries the host's error of type `aborted` (OpenCode 2.3.0
+  the turn ends at the first of these after it (`endsExecution` in
+  `host.mjs`): the idle marker of that execution, or a step the host ended
+  by an interrupt. Such a step's message carries the host's error of type `aborted` (OpenCode 2.3.0
   to the tested version give no other assistant message that type), or,
   where another error came first in that step, the call a person declined
-  carries the host's decline (`HOST_DECLINE_TEXT`). A person's stop and a
-  failure leave their marker after such a step; for an end the host records
+  carries the host's decline (`HOST_DECLINE_TEXT`). Such a step ends its
+  execution, but where the session's location closed while a request waited
+  for approval: the host goes on with that execution once the location is
+  back, and that gets nothing either. A person's stop and a failure leave
+  their marker after such a step; for an end the host records
   as a shutdown it leaves none: its own, which ends the run with the
   process, and that of a step that a person ended by declining one of its
   tool calls without a message (shell `ask` or `inherit`), after which the
@@ -181,8 +184,9 @@ settings, backups and failure records. Never upload `.local/`.
   turn's own end, not an earlier execution's. What follows it is no part of
   the turn; someone else's message there still fails it. A turn that ended at
   an interrupted step fails as interrupted and is not tried in a new session
-  (a reviewer's first turn fails its pass, a correction or follow-up turn
-  leaves the answer before it standing), and none of its answers is taken.
+  (a reviewer's first turn fails its pass; after a correction or follow-up
+  turn the latest usable answer stands, where there is one), and none of its
+  answers is taken.
   A host that wrote such a signal and went on would end a turn early, which
   fails it; one that ended an execution with neither a marker nor such a
   signal would leave the turn open until a later marker. The decline fixture

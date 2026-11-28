@@ -1052,13 +1052,16 @@ the last assistant message before that end, and the end says how the turn
 ended. This follows how OpenCode 2.3.0 to the tested version run a session. A
 prompt that is admitted waits in the session's inbox and becomes a message
 only in the execution that takes it. An execution is one busy period: it goes
-on while input reaches the session, and ends at the first of these
-(`endsExecution` in `host.mjs`): the idle marker it leaves, or a step the
-host ended by an interrupt. Such a step's message carries the host's error
-of type `aborted` ("Step interrupted"; the host gives no other assistant
-message that type), or, where another error came first in that step (a
-finish reason the host does not know, say), the call a person declined
-carries the host's decline. So the first end after the prompt is the end of
+on while input reaches the session, and the turn ends at the first of these
+after its prompt (`endsExecution` in `host.mjs`): the idle marker of that
+execution, or a step the host ended by an interrupt. Such a step's message
+carries the host's error of type `aborted` ("Step interrupted"; the host
+gives no other assistant message that type), or, where another error came
+first in that step (a finish reason the host does not know, say), the call a
+person declined carries the host's decline. Such a step ends its execution,
+but where the session's location closed while a request waited for approval:
+the host goes on with that execution once the location is back, and that
+gets nothing either. So the first end after the prompt is the end of
 the execution that had the prompt, also where the model never answered (the
 turn was interrupted or failed), and what another execution wrote after it
 is not the turn's: a command that ended later woke the session, and neither
@@ -1083,8 +1086,9 @@ starts another execution at once. The interrupted step is the turn's end all
 the same: the first request the host prepares afterwards is refused, the
 grant closes, and that execution gets nothing. The turn fails as interrupted
 (`failure=permanent`) and is not tried in a new session, since a person
-declined what it asked for: a reviewer's first turn fails its pass, and a
-correction or follow-up turn leaves the answer before it standing. What a
+declined what it asked for: a reviewer's first turn fails its pass, and
+after a correction or follow-up turn the latest usable answer stands, where
+there is one. What a
 planning turn's tools returned before that step stays recorded, as for any
 failed planning turn. A decline with a message is the command's result
 instead: the model receives the message and goes on.

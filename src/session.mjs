@@ -340,13 +340,15 @@ export async function requestReview(context, { sessionID, text, role, model, met
   // The turn ended at a step the host interrupted: that step, not a marker, is its end.
   const cut = end >= 0 && steps[end].type !== 'idle';
   // What reached the session since the turn before was sent to this turn's model with the rest: from that turn's
-  // idle marker on, or from the session's beginning.
-  let from = 0;
+  // idle marker on, or from the session's beginning. Where that turn is no longer where the session's messages had
+  // it, this turn fails for it, but only after its own outcome has been looked at, which decides whether it is tried
+  // again.
+  let from = 0, lost = false;
   if (since !== undefined) {
     const before = messages.findIndex(message => message?.id === since);
     const ended = before < 0 ? -1 : messages.findIndex((message, index) => index > before && message?.type === 'idle');
-    if (ended < 0 || ended > indexes[0]) throw changed('[AZPR] The turn before this one is no longer where the session\'s messages had it; no output was accepted.');
-    from = ended + 1;
+    if (ended < 0 || ended > indexes[0]) lost = true;
+    else from = ended + 1;
   }
   const between = messages.slice(from, indexes[0]).filter(message => !own(message));
   // Either way the host recovers an interrupted stream; both need the caller's consent. The continuation of the
@@ -383,6 +385,7 @@ export async function requestReview(context, { sessionID, text, role, model, met
       : '';
     throw responseError(`[AZPR] ${detail}Reviewer execution did not finish successfully (session=${execution.sessionOutcome}; terminal=${execution.terminalOutcome}; assistantResponses=${assistants.length}; finish=${finish}).`, answer, execution);
   }
+  if (lost) throw changed('[AZPR] The turn before this one is no longer where the session\'s messages had it; no output was accepted.');
   // Someone else's message ends it: before the prompt, in the turn or after it. A turn that did not succeed has
   // failed by its own outcome above.
   if ([...between, ...steps].some(message => FOREIGN_MESSAGE_TYPES.includes(message?.type) && !continuation.synthetic.has(message))) {

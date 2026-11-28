@@ -623,6 +623,8 @@ test('an execution ends at the idle marker it leaves or at a step the host ended
     // A call the host stopped because its step failed or is tried again, a refusal with feedback, and other forms.
     { type: 'assistant', finish: 'error', error: { type: 'provider.transport', message: 'cut' }, retry: { attempt: 2 }, content: [tool({ type: 'aborted', message: 'Tool execution interrupted' })] },
     { type: 'assistant', finish: 'tool-calls', content: [tool({ type: 'permission.rejected', message: 'Not this command.' })] },
+    // A person's feedback is kept as written, also where it reads like the host's decline: the model gets it.
+    { type: 'assistant', finish: 'tool-calls', content: [tool({ type: 'permission.rejected', message: 'The user declined this tool call' })] },
     { type: 'assistant', content: [{ type: 'tool', state: { status: 'completed', error: { type: 'aborted', message: 'The user declined this tool call' } } }] },
     { type: 'assistant', content: { 0: declined } }, { type: 'synthetic', content: [declined] }]) {
     assert.equal(endsExecution(message), false, JSON.stringify(message));

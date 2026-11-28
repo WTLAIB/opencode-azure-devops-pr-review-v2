@@ -11,8 +11,9 @@ import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
  *   follows. The turn ends at that step: the pass fails as interrupted
  *   (failure=permanent, terminal=interrupted) and is not tried again.
  * - background: the reviewer starts a background command (approved), then asks
- *   for another command, which is declined without a message once the first
- *   one has ended and its notice waits in the session's inbox. That notice
+ *   for another command. Once that request waits for a person, the fixture
+ *   lets the first command end, and declines the request without a message
+ *   once its notice waits in the session's inbox. That notice
  *   wakes the session as the declined step ends, and OpenCode starts another
  *   execution at once. Its request is no request of the turn, which ended at
  *   the declined step: AZPR refuses it before anything is sent, and the pass
@@ -29,7 +30,7 @@ import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
  * Synthetic completions test orchestration, not model review quality.
  */
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
@@ -50,7 +51,7 @@ const files = ['/src/app.ts'];
 const SCENARIOS = ['plain', 'background', 'mixed', 'message'];
 const DECLINE = 'The user declined this tool call';
 const MESSAGE = 'Not this command; review without it.';
-const marker = join(dirs.work, 'background-done.txt');
+const marker = join(dirs.work, 'background-done.txt'), gate = join(dirs.work, 'gate.txt');
 const requests = [], events = [], receipts = [];
 const started = new Set(), declinedAt = {};
 let child, logs = '', current;
@@ -73,7 +74,8 @@ const provider = createServer(async (request, response) => {
       if (tools.length === 0 && !started.has(scenario)) {
         started.add(scenario);
         call = delayed
-          ? { name: 'shell', arguments: { command: 'sleep 1 && touch background-done.txt', background: true } }
+          // It ends once the fixture opens the gate, which it does when the next request waits for a person.
+          ? { name: 'shell', arguments: { command: 'until [ -f gate.txt ]; do sleep 0.1; done; touch background-done.txt', background: true } }
           : { name: 'shell', arguments: { command: 'echo first' } };
       } else if (delayed && tools.length === 1 && !entry.afterDecline) {
         call = { name: 'shell', arguments: { command: 'echo second' } };
@@ -137,8 +139,10 @@ try {
             continue;
           }
           if (scenario === 'background' || scenario === 'mixed') {
-            // Declined once the background command has ended and its notice waits in the session's inbox, so that
-            // the notice wakes the session as the declined step ends.
+            // The request waits for a person: the background command may end now. It is declined once that
+            // command has ended and its notice waits in the session's inbox, so that the notice wakes the session
+            // as the declined step ends.
+            await writeFile(gate, '');
             const until = Date.now() + 60000;
             const waiting = async () => JSON.stringify((await rawApi(`/api/session/${item.sessionID}/inbox`)).data ?? []).includes('background-result');
             while (Date.now() < until && !(existsSync(marker) && await waiting())) await sleep(50);
@@ -157,6 +161,7 @@ try {
   const outcomes = {};
   for (const scenario of SCENARIOS) {
     current = scenario;
+    await rm(gate, { force: true }); await rm(marker, { force: true });
     await api(`/api/session/${origin.id}/command`, { name: 'pr-review', text: `${prUrl} decline-${scenario}`, delivery: 'steer' });
     const receipt = (await api(`/api/session/${origin.id}/inbox`)).data.map(item => item.payload?.text ?? '').at(-1);
     receipts.push(receipt);
@@ -240,7 +245,7 @@ try {
     message: 'COMPLETE; the model received the message as the command\'s result', providerRequests: requests.length }, null, 2));
 } finally {
   answering = false; await responder?.catch(() => {});
-  if (child && child.exitCode === null) { const stopped = once(child, 'exit'); child.kill('SIGTERM'); const timer = setTimeout(() => child.kill('SIGKILL'), 5000).unref(); await stopped; clearTimeout(timer); }
+  if (child && child.exitCode === null && child.signalCode === null) { const stopped = once(child, 'exit'); child.kill('SIGTERM'); const timer = setTimeout(() => child.kill('SIGKILL'), 5000).unref(); await stopped; clearTimeout(timer); }
   provider.closeAllConnections(); await new Promise(done => provider.close(done));
   adoServer.closeAllConnections(); await new Promise(done => adoServer.close(done));
   await writeFile(join(fixture, 'host.log'), logs); await writeFile(join(fixture, 'requests.json'), JSON.stringify(requests, null, 2));

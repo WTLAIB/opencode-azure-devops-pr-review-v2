@@ -101,8 +101,8 @@ and Azure DevOps services. The runs below were made on the candidate's commit
 step OpenCode ended by an interrupt: one whose message carries OpenCode's
 error "Step interrupted", or, where another error came first in that step,
 whose declined call carries OpenCode's decline. `turnState` and
-`requestReview` draw that line, and the stage line of such a turn says
-`terminal=interrupted`. No prompt changed (the hash test holds them), no
+`requestReview` draw that line, and where such a turn fails its stage, the
+stage line says `terminal=interrupted`. No prompt changed (the hash test holds them), no
 setting is new, and the package has the files of 0.5.2.
 
 ### Offline
@@ -155,10 +155,12 @@ setting is new, and the package has the files of 0.5.2.
   recorded there, after the background command, three authorized requests
   in the declined session and a pass that a new session completed.
 - **Controls.** In a copy without the declined call as a sign, the review
-  with an unknown finish reason let OpenCode's next execution through and
-  completed after a retry in a new session; in a copy whose `turnState`
-  reads markers only, the review after the background command did. Each
-  fails the fixture.
+  with an unknown finish reason let OpenCode's next execution through, and
+  the pass completed after a retry in a new session. In a copy whose
+  `turnState` reads markers only, the review after the background command
+  let that execution's request through and its answer was written to the
+  session, while `requestReview` still failed the turn as interrupted and
+  the review was INCOMPLETE. Each fails the fixture.
 - **What OpenCode does.** Read from the source of OpenCode 2.3.0 to 2.4.2,
   the same in each: a step's message keeps the first error the step was
   failed with, and the only one of type `aborted` is "Step interrupted"; a
@@ -6715,8 +6717,9 @@ transient failure, and its error names the last activity.
   (OpenCode's full-screen terminal UI and its desktop app give none in
   AZPR's sessions), OpenCode interrupts that step, and the turn ends there:
   AZPR takes no answer of it and does not try it in a new session (a
-  reviewer's first turn fails its pass; a correction or follow-up turn
-  leaves the answer before it standing), and nothing OpenCode starts in that
+  reviewer's first turn fails its pass; after a correction or follow-up
+  turn, the latest usable answer stands where there is one), and nothing
+  OpenCode starts in that
   session afterwards is authorized. A decline with a message (`opencode
   mini` asks for one) is the command's result instead: the model receives
   the message and goes on.
