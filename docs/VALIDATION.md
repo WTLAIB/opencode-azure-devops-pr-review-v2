@@ -58,7 +58,9 @@ acceptance runs, including the MCP-based runs, are preserved in
   same 24 pull requests with one to four passes of GPT-6.2 Sol, all 96
   reviews COMPLETE. With the 0.5.2 candidate on OpenCode 2.4.2, a
   gpt-6-luna review of each of the three test PRs and its preview, all
-  COMPLETE and nothing posted ([with a real model](#with-a-real-model)).
+  COMPLETE and nothing posted ([with a real model](#with-a-real-model-1)),
+  and the same with the 0.5.3 candidate, where the review without findings
+  started no preview ([with a real model](#with-a-real-model)).
 - **Every release.** Following the [releasing guide](RELEASING.md), the
   candidate is installed from a clean source archive and from its public Git
   commit before it is tagged, and the published npm package is installed from
@@ -89,6 +91,34 @@ The test-PR runs show that the workflow works and what it found on those PRs;
 the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
+
+## 0.5.3 after publication (2026-11-28)
+
+- **The tag and the release.** The annotated tag `v0.5.3` points at the
+  merge commit `4e0050d`, whose tree is the candidate `0709bba` that passed
+  the last review. The GitHub Release carries the release notes, the source
+  archive and `SHA256SUMS`; the downloaded archive matches its checksum and
+  is byte-identical to the archive GitHub makes of the tag. The CI of
+  `main` and of the tag passed.
+- **The npm package.** `opencode-azure-devops-pr-review@0.5.3` was
+  published from a clean export of the tag. The registry's integrity and
+  shasum are those of the package built from the tag, the tarball
+  downloaded from the registry is byte-identical to it, and `latest` names
+  0.5.3. Installed from the registry, the package passed the native smoke
+  (129 model requests, 221 Azure DevOps calls), the panel (47, 73), the
+  setup (0, 16) and the confirmed update of settings of 0.4.x (0, 7);
+  installed from the Git tag, the same four with the same counts. Before
+  the tag, the candidate's commit installed from GitHub passed the native
+  smoke, the panel and the setup with the same counts, and its source
+  archive installed with the installer: the runtime, the prompts and the
+  license as in the archive, the settings kept byte for byte by
+  `--replace`.
+- **On one real machine.** After the release the maintainer's machine went
+  from the candidate's Git commit to `opencode-azure-devops-pr-review@0.5.3`
+  with the two plugin commands. One `/pr-check` there, against Azure DevOps
+  Services, was READY with every row `ok`, among them "OpenCode 2.4.2, the
+  tested version" and "Running opencode-azure-devops-pr-review@0.5.3". No
+  model ran and nothing was written to Azure DevOps.
 
 ## 0.5.3 release candidate acceptance (2026-11-28)
 
@@ -174,6 +204,62 @@ setting is new, and the package has the files of 0.5.2.
   records as a shutdown, which leaves no marker; its text is written only
   while the session's location is open. Measured on 2.4.2: the forms the
   fixture holds.
+
+### Reviews by a second model
+
+The pull request was reviewed by a second model (GPT-6.2 Astra at its highest
+reasoning effort through the Codex CLI 0.171.0, in a read-only sandbox on a
+clean clone), after a review of the design summary before any code. Its
+instructions were the change, its purpose and the host behaviour the change
+relies on, with the source of OpenCode 2.4.2 and the measured records; not
+the results of the checks above. The design review asked for four changes
+before code, each within the settled design: the declined call as a second
+sign of a step's end (for a step whose message keeps an error that came
+first), no marker after such a step taken for the turn's, the turn's failure
+at the scope of a turn, and the turn before left reading its marker. The
+first round was two independent reviews of the whole change and reported 14
+points, counted once per cause; 7 were fixed before the release (the turn's
+own outcome before a missing turn before, the order the fixture tests
+resting on timing, and documents). The second round reviewed the
+corrections and reported 5 points; 3 were fixed, all in documents. The third
+round, a fresh review of the whole pull request, reported 3 points, 2 of
+them to be fixed before the release by its account: the README's `shell`
+row promised no retry for a declined request, where the inactivity watchdog
+can stop the stage first (two shell requests in one step, a long quiet
+command approved and the other declined, a short `stageIdleSeconds`); and
+the fixture checks a session's messages in an exact order, which fails where
+a session's two requests straddle midnight and OpenCode adds an update of
+its date instruction between them. Neither was judged to hold the release
+back: the first is the watchdog's documented behaviour, which stops that
+command without any decline, and the pull request of this record narrows the
+row; the second is a test that can fail about once in ten thousand runs and
+is recorded for a later version. A first attempt at the third round stopped
+at the reviewer's usage limit before it reported anything.
+
+### With a real model
+
+After the last review, on the maintainer's machine: OpenCode 2.4.2 as the
+background service, the candidate's commit `0709bba` installed by OpenCode's
+plugin manager from GitHub, and Azure DevOps Services. On three test PRs of
+the maintainer's organization (1, 35 and 316 changed files), `/pr-check`,
+then `/pr-review` with GPT-6 Luna in both passes and the rating by the same
+model, and the preview that `--preview` starts after it; nothing was posted.
+
+- Each `/pr-check` was READY with all 12 rows `ok`, among them "OpenCode
+  2.4.2, the tested version" and "Running" the candidate's commit.
+- Each review was COMPLETE with every changed file reviewed in both passes
+  (the 316 files in 13 shards per pass, where one shard's reviewer got its
+  follow-up turn and completed), and no session failed.
+- The previews of the 1-file and the 316-file PR were PREVIEW ("Nothing was
+  posted"). The review of the 35-file PR reported no finding this time, so
+  its automatic preview was skipped, as it is for every review without
+  findings ("nothing was planned or posted and no model was used").
+- From `/pr-check` to the last receipt the runs took 75 seconds, 45 seconds
+  and 5.4 minutes.
+
+The machine's settings deny shell, so no request was declined in these runs:
+they show that the release runs a review from end to end on the tested host
+with a real model, and the decline itself was measured with the fixture.
 
 ### Not verified
 
