@@ -892,8 +892,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // `turn` is the prompt of the call that waits for a turn, with the nonce it is sent with, from before it is
       // sent until that call ends. The wait for the session does not tell where the turn ends, since it also
       // covers what the host starts right after it: before every request the session's own messages are read,
-      // and a request is the turn's only while the turn's prompt is among them, known by that nonce, and no
-      // idle marker follows it (see the `context` hook). The end of the wait closes the grant in any case. `checked` is the turn of which a request was looked at so and found to be the turn's, and
+      // and a request is the turn's only while the turn's prompt is among them, known by that nonce, and nothing
+      // that ends its execution follows it (an idle marker, or a step the host interrupted; see the `context` hook).
+      // The end of the wait closes the grant in any case. `checked` is the turn of which a request was looked at so and found to be the turn's, and
       // `validated` the prompt of the last turn whose answer was taken.
       open: false, turn: null, checked: null, validated: undefined, turnChecks: 0, refusedOutsideTurn: 0, turnUnreadable: 0, toolsLeftListed: 0, notesNotAdded: 0, toolless: false,
       referenceSnapshot: run.snapshot ?? run.review?.snapshot,
@@ -2104,8 +2105,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // command woke the session), whose request does not hold the prompt; and the wait also covers an execution
       // the host starts by itself right after the turn's, whether the turn succeeded or failed. Neither gets
       // anything. The session's own messages tell: a prompt becomes a message in the execution that takes it,
-      // and an execution leaves its idle marker before the host starts another one. The prompt is known among
-      // them by the nonce it was sent with.
+      // and an execution has ended (its idle marker, or a step the host interrupted, `endsExecution`) before the
+      // host starts another one. The prompt is known among them by the nonce it was sent with.
       const turn = g.turn;
       const stored = g.open && turn !== null ? await sessionMessages(g, event.sessionID) : null;
       const prompt = stored ? promptOf(stored, turn.nonce) : undefined;
@@ -2113,7 +2114,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // Looked at again, with nothing awaited between this and what follows: the call that waits for the turn
       // can have ended while the messages were read.
       if (state !== 'running' || grants.get(event.sessionID) !== g || !g.open || g.turn !== turn) {
-        // Past its marker the turn is over; before its prompt is a message, the turn's own request is still to come.
+        // Past its end the turn is over; before its prompt is a message, the turn's own request is still to come.
         if (state === 'ended' && grants.get(event.sessionID) === g && g.turn === turn) close(g);
         // Where the session's messages could not be read, nothing is known of the turn: the request is refused
         // all the same, and said to be refused for that, not for being none of a turn's.

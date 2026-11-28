@@ -71,7 +71,7 @@ the review duration.
    [company networks](docs/ENTERPRISE.md#company-networks) first):
 
    ```sh
-   opencode plugin add opencode-azure-devops-pr-review@0.5.2
+   opencode plugin add opencode-azure-devops-pr-review@0.5.3
    ```
 
 2. In OpenCode's terminal UI, type `/pr-setup`. Dialogs ask for your Azure
@@ -581,14 +581,14 @@ Azure DevOps REST API with the runtime's built-in `fetch`.
 Install the npm package with OpenCode's plugin manager:
 
 ```sh
-opencode plugin add opencode-azure-devops-pr-review@0.5.2
+opencode plugin add opencode-azure-devops-pr-review@0.5.3
 ```
 
 The same release is also a versioned Git package, which needs Git but not the
 npm registry:
 
 ```sh
-opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.5.2'
+opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.5.3'
 ```
 
 Add only one of them. OpenCode (2.3.0 and later) loads the plugin into a
@@ -603,7 +603,7 @@ To select another configuration file, use an absolute path in the host config:
 ```json
 {
   "plugins": [{
-    "package": "opencode-azure-devops-pr-review@0.5.2",
+    "package": "opencode-azure-devops-pr-review@0.5.3",
     "options": { "settingsFile": "/absolute/path/to/azpr/settings.json" }
   }]
 }
@@ -644,7 +644,7 @@ For an entry that `opencode plugin add` created, add the new version and,
 only when that succeeds, remove the previous one:
 
 ```sh
-opencode plugin add opencode-azure-devops-pr-review@0.5.2 &&
+opencode plugin add opencode-azure-devops-pr-review@0.5.3 &&
   opencode plugin remove opencode-azure-devops-pr-review@PREVIOUS_VERSION
 ```
 
@@ -679,7 +679,8 @@ show a single `azpr` row with the new version (from 0.3.1, `/pr-check` names
 it too); if it still shows the previous one, run `opencode service restart`.
 Exact versions stay pinned: `opencode plugin update` leaves them unchanged,
 and so do OpenCode's automatic plugin updates (2.4.0 and later).
-See the [0.5.2 release notes](docs/releases/v0.5.2.md) for the move to OpenCode 2.4.2, the
+See the [0.5.3 release notes](docs/releases/v0.5.3.md) for a declined shell request that ends its turn, the
+[0.5.2 release notes](docs/releases/v0.5.2.md) for the move to OpenCode 2.4.2, the
 [0.5.1 release notes](docs/releases/v0.5.1.md) for the move to OpenCode 2.4.1, the
 [0.5.0 release notes](docs/releases/v0.5.0.md) for review passes in place of roles, the
 [0.4.6 release notes](docs/releases/v0.4.6.md) for one comment for a defect at several places, the
@@ -759,8 +760,8 @@ says so, and `/pr-setup` then updates it as above.
 <details>
 <summary>Source installation and replacement</summary>
 
-Download the [v0.5.2 source archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.5.2.tar.gz)
-and extract it, or check out tag `v0.5.2`. The installer needs POSIX `sh` and
+Download the [v0.5.3 source archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.5.3.tar.gz)
+and extract it, or check out tag `v0.5.3`. The installer needs POSIX `sh` and
 Python 3's standard library. From that source directory:
 
 ```sh
@@ -1130,7 +1131,7 @@ restart the OpenCode service.
 | `returnReport` | `receipt`; `full` also encloses the rendered report in the receipt. |
 | `outputLanguage` | `en`; used by reviews, the report and comments. `zh-TW` for Traditional Chinese. |
 | `runTimeoutSeconds` | `null` (no whole-command timer); an integer 10–7200 enables one. |
-| `shell` | `deny`: private reviewers cannot run shell commands (the tool is hidden). `ask`: each command needs your approval in OpenCode; the request is the reviewer session's, one that nobody answers stops the stage after `workflow.stageIdleSeconds`, and one declined without a reason fails that session's turn (the full-screen terminal UI and the desktop app give none; a reason given in `opencode mini` reaches the model as the command's result; [known limitation](docs/VALIDATION.md#known-limitations)). `inherit`: host permissions decide. A command that goes on in the background (OpenCode 2.3.1 and later move one there when its timeout runs out, after 120 seconds by default) tells its reviewer when it has ended, and the pass goes on. One that ends after the reviewer's session has gone idle is not waited for; one that ends right after the answer, while the session is still at work, is still handed to the reviewer, which may answer once more. A mode in which reviewers run code in an isolated sandbox was prototyped and measured with two models; it changed neither recall nor the share of valid findings measurably, so there is none ([validation](docs/VALIDATION.md#reviewers-running-code-in-a-sandbox-2026-11-25-and-26)). |
+| `shell` | `deny`: private reviewers cannot run shell commands (the tool is hidden). `ask`: each command needs your approval in OpenCode; the request is the reviewer session's, one that nobody answers stops the stage after `workflow.stageIdleSeconds`, and one declined without a reason fails that session's turn, which is not tried again (the full-screen terminal UI and the desktop app give none; a reason given in `opencode mini` reaches the model as the command's result, and the session goes on). `inherit`: host permissions decide. A command that goes on in the background (OpenCode 2.3.1 and later move one there when its timeout runs out, after 120 seconds by default) tells its reviewer when it has ended, and the pass goes on. One that ends after the reviewer's session has gone idle is not waited for; one that ends right after the answer, while the session is still at work, is still handed to the reviewer, which may answer once more. A mode in which reviewers run code in an isolated sandbox was prototyped and measured with two models; it changed neither recall nor the share of valid findings measurably, so there is none ([validation](docs/VALIDATION.md#reviewers-running-code-in-a-sandbox-2026-11-25-and-26)). |
 | `progressNotices` | `true`: short PROGRESS notices in the invoking conversation. |
 | `deletePrivateSessions` | `true`: when a command ends, AZPR deletes its private reviewer sessions except the one that holds the review's report (see [retention](#retention-and-privacy)); `false` keeps every session. |
 | `terminalPanel` | `auto`: the [terminal panel](#terminal-panel) opens by itself when a review or comment run starts and when a report or preview arrives.<br>`manual`: it opens only with `/pr-panel`. |
@@ -1631,8 +1632,8 @@ dependency and is not built on your machine.
 Uninstall without `--apply` previews; `--apply` archives only this package under
 `azpr-v2-backups` and leaves the private state directory for you to delete.
 For a native installation, remove the entry you added, for example
-`opencode plugin remove opencode-azure-devops-pr-review@0.5.2` or
-`opencode plugin remove 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.5.2'`;
+`opencode plugin remove opencode-azure-devops-pr-review@0.5.3` or
+`opencode plugin remove 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.5.3'`;
 the external settings, PAT file and private review state remain available.
 
 [Architecture](docs/ARCHITECTURE.md), [commenting](docs/COMMENTING.md),
@@ -1645,7 +1646,7 @@ or personal model selections.
 ## License and releases
 
 [MIT](LICENSE), copyright 2026 WTLAIB. See the [changelog](CHANGELOG.md) for the
-release scope, [v0.5.2](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.5.2)
+release scope, [v0.5.3](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.5.3)
 for downloads, the [npm package](https://www.npmjs.com/package/opencode-azure-devops-pr-review),
 the [demo page](docs/DEMO.md) for the recordings and the version each was made
 with, and [releasing](docs/RELEASING.md) for the release process.

@@ -1,6 +1,6 @@
 /** OpenCode V2 session transport. No provider, Azure or HTTP client. */
 import { isDeepStrictEqual } from 'node:util';
-import { FOREIGN_MESSAGE_TYPES, USED_UP_LIMITS, isHostContinuation, hostInstructions, recordOf, requireMethods } from './host.mjs';
+import { FOREIGN_MESSAGE_TYPES, USED_UP_LIMITS, endsExecution, isHostContinuation, hostInstructions, recordOf, requireMethods } from './host.mjs';
 
 const pendingAdmissions = new WeakMap();
 const textValue = value => typeof value === 'string' && value.length > 0;
@@ -271,12 +271,13 @@ export function classifyFailure(error) {
  * Works for the first prompt and for follow-up repair prompts in the same
  * session: only the turn after this admitted prompt is examined.
  *
- * A turn is the admitted prompt and what follows it up to the first idle marker. A prompt becomes a message of
- * the session only in the execution that takes it, and an execution leaves one marker when it ends, unless the
- * host records that end as a shutdown (`turnState` in host.mjs says when), so that marker is the end of the
+ * A turn is the admitted prompt and what follows it up to the end of the execution that takes it: the first idle
+ * marker after it, or a step the host ended by an interrupt (`endsExecution` in host.mjs), whichever comes first. A
+ * prompt becomes a message of the session only in the execution that takes it, so that end is the end of the
  * execution that had the prompt, and says how the turn ended. The turn's answer is the last assistant message
- * before it. A step that a person's decline ended carries the host's error, so no answer of such a turn is taken,
- * whatever follows that step.
+ * before it. A turn that ended at such a step (a person stopped it, or declined one of its tool calls without a
+ * message, which leaves no marker) fails as interrupted, whatever follows that step: a marker after it may be
+ * another execution's, and what the host did after it is no part of the turn.
  *
  * Two kinds of messages the host writes by itself are no one else's input and no step of the turn. What it
  * wrote of instructions (`hostInstructions`): its updates, and the instruction files it loaded after a native
@@ -334,8 +335,10 @@ export async function requestReview(context, { sessionID, text, role, model, met
   const written = hostInstructions(messages), loaded = new Set(written.loads), updated = new Set(written.updates);
   const own = message => loaded.has(message) || updated.has(message) || notices.has(message);
   const steps = after.filter(message => !own(message));
-  const end = steps.findIndex(message => message?.type === 'idle');
+  const end = steps.findIndex(endsExecution);
   const turn = end < 0 ? steps : steps.slice(0, end + 1);
+  // The turn ended at a step the host interrupted: that step, not a marker, is its end.
+  const cut = end >= 0 && steps[end].type !== 'idle';
   // What reached the session since the turn before was sent to this turn's model with the rest: from that turn's
   // idle marker on, or from the session's beginning.
   let from = 0;
@@ -355,16 +358,17 @@ export async function requestReview(context, { sessionID, text, role, model, met
   const assistants = turn.filter(message => message?.type === 'assistant');
   const final = assistants.at(-1);
   const answer = final && Array.isArray(final.content) ? normalizeAnswer(final, sessionID) : undefined;
-  // The turn's own marker says how it ended. The session's outcome is the one its latest marker recorded, which can
-  // be a later execution's, or an earlier one's where no marker follows the prompt (an end recorded as a shutdown).
+  // The turn's own end says how it ended: its marker, or the step the host interrupted. The session's outcome is the
+  // one its latest marker recorded, which can be a later execution's, or an earlier one's where nothing ends the
+  // turn yet.
   const marked = end >= 0;
   if (terminal?.type !== 'idle' || terminal.outcome !== 'succeeded') {
     const outcome = value => ['succeeded', 'failed', 'interrupted'].includes(value) ? value : 'unknown';
     const finish = ['stop', 'tool-calls', 'length', 'content-filter', 'error', 'cancelled'].includes(final?.finish) ? final.finish : 'unknown';
     const execution = { sessionOutcome: outcome(session.outcome),
-      terminalOutcome: terminal?.type === 'idle' ? outcome(terminal.outcome) : 'missing-idle',
+      terminalOutcome: terminal?.type === 'idle' ? outcome(terminal.outcome) : cut ? 'interrupted' : 'missing-idle',
       assistantResponses: assistants.length, lastFinish: finish,
-      interrupted: (!marked && session.outcome === 'interrupted') || terminal?.outcome === 'interrupted' || final?.error?.type === 'aborted' };
+      interrupted: cut || (!marked && session.outcome === 'interrupted') || terminal?.outcome === 'interrupted' || final?.error?.type === 'aborted' };
     // OpenCode opens a compaction's message before it asks for the summary, so a compaction it attempted in this
     // turn, which AZPR refuses, shows here. A background summary (OpenCode 2.1.4 and later) publishes nothing.
     const compaction = turn.filter(message => message?.type === 'compaction').at(-1);

@@ -70,6 +70,11 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   one constant that CI, the installer and the README follow, and the error
   for a reviewer's prompt that is gone names the causes it may have, a
   prompt taken back in the terminal UI among them.
+- **A declined shell request ends its turn (0.5.3).** A turn ends where the
+  execution that took its prompt ended, also at a step OpenCode interrupted:
+  with `shell: "ask"` or `"inherit"`, what OpenCode does in a session after a
+  person declined its shell request without a message gets no model request
+  and no tool, and a host fixture holds the forms of OpenCode this rests on.
 - **Rows the host's read returns whole (0.5.1).** The pages of AZPR's
   private data hold rows short enough for OpenCode's native read, which cut
   every row after 2,000 characters, so a model that read a large value in

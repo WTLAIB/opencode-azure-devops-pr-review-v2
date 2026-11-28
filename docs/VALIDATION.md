@@ -6623,22 +6623,17 @@ transient failure, and its error names the last activity.
   the state of the session that keeps the report when it was the last one. A
   request that nobody approves (`shell: "ask"`) stops the stage after
   `workflow.stageIdleSeconds`, in its retry too.
-- **A declined shell request.** With `shell: "ask"` or `"inherit"`, a
-  person can decline a shell request of one of AZPR's sessions (a
-  reviewer's, say). Where a decline without a message (OpenCode's
-  full-screen terminal UI and its desktop app give none in AZPR's sessions;
-  source) ends the step, it ends its execution too, and OpenCode records
-  that end as a shutdown, which leaves no idle marker (OpenCode 2.3.0 to the
-  tested version, from the source; measured on 2.4.1 and 2.4.2 with the fake
-  model). AZPR counts a turn to the first idle marker after its prompt,
-  which is then a later execution's, if one comes, and until then what the
-  session does while AZPR waits for it counts to that turn: the model
-  requests and tool calls of whatever execution OpenCode starts in it, and
-  what those calls return (comment planning, for one, can hand it to a later
-  session of the same page). The declined step carries OpenCode's error, so
-  AZPR takes no answer of that turn. A decline with a message (`opencode
+- **A shell request declined without a message fails its turn.** With
+  `shell: "ask"` or `"inherit"`, a person can decline a shell request of one
+  of AZPR's sessions (a reviewer's, say). Declined without a message
+  (OpenCode's full-screen terminal UI and its desktop app give none in
+  AZPR's sessions), OpenCode interrupts that step, and the turn ends there:
+  AZPR takes no answer of it and does not try it in a new session (a
+  reviewer's first turn fails its pass; a correction or follow-up turn
+  leaves the answer before it standing), and nothing OpenCode starts in that
+  session afterwards is authorized. A decline with a message (`opencode
   mini` asks for one) is the command's result instead: the model receives
-  the message and goes on. AZPR 0.5.1 behaves the same.
+  the message and goes on.
 - **An answer that reaches the model's output limit fails its pass.** OpenCode
   then asks the model to go on, with a message of its own that AZPR takes for
   someone else's: both sessions of the pass fail, and the receipt speaks of

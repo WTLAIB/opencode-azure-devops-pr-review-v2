@@ -159,26 +159,34 @@ settings, backups and failure records. Never upload `.local/`.
   such shell (`ownShellNotices`); that can only be with shell allowed, and
   it rests on the host's metadata, since nothing proves who wrote a message.
   Never accept a message that the model saw by its text or its form alone.
-- A turn is the admitted prompt up to the first idle marker after it, and
-  its answer is the last assistant message before that marker. A prompt
+- A turn is the admitted prompt up to the end of the execution that took
+  it, and its answer is the last assistant message before that end. A prompt
   becomes a message of the session only in the execution that takes it, and
-  an execution leaves one marker however it ends, unless the host records
-  that end as a shutdown, so that marker is the end of the execution that had
-  the prompt and says how the turn ended; the session's own outcome is the
-  one its latest marker recorded, which can be a later execution's. Never
-  skip a marker: one before any answer is the turn's own end, not an
-  earlier execution's. What
-  follows the marker is no part of the turn; someone else's message there
-  still fails it. The host records two ends as a shutdown: its own, which
-  ends the run with the process, and that of a step that ended because a
-  person declined one of its tool calls without a message (shell `ask` or
-  `inherit`), after which the host runs on. The first marker after such a
-  turn's prompt is then a later execution's, if one comes, and until then
-  what the session does while the wait for it lasts counts to the turn (the
-  requests and tool calls of whatever the host starts there, and what those
-  return, which comment planning, for one, can hand to a later session of
-  its page); the declined step carries the host's error, so no answer of
-  such a turn is taken. A known limitation (docs/VALIDATION.md).
+  an execution ends at the first of these (`endsExecution` in `host.mjs`):
+  the idle marker it leaves, or a step the host ended by an interrupt. Such a
+  step's message carries the host's error of type `aborted` (OpenCode 2.3.0
+  to the tested version give no other assistant message that type), or,
+  where another error came first in that step, the call a person declined
+  carries the host's decline (`HOST_DECLINE_TEXT`). A person's stop and a
+  failure leave their marker after such a step; for an end the host records
+  as a shutdown it leaves none: its own, which ends the run with the
+  process, and that of a step that a person ended by declining one of its
+  tool calls without a message (shell `ask` or `inherit`), after which the
+  host runs on and, where something woke the session meanwhile, starts
+  another execution at once. So the first such end after the prompt is the
+  end of the execution that had the prompt; a marker after an interrupted
+  step may be that later execution's and says nothing of the turn. The
+  session's own outcome is the one its latest marker recorded, which can be
+  a later execution's. Never skip an end: one before any answer is the
+  turn's own end, not an earlier execution's. What follows it is no part of
+  the turn; someone else's message there still fails it. A turn that ended at
+  an interrupted step fails as interrupted and is not tried in a new session
+  (a reviewer's first turn fails its pass, a correction or follow-up turn
+  leaves the answer before it standing), and none of its answers is taken.
+  A host that wrote such a signal and went on would end a turn early, which
+  fails it; one that ended an execution with neither a marker nor such a
+  signal would leave the turn open until a later marker. The decline fixture
+  holds these forms on the tested host.
 - A private session gets a model request, a retry and a tool only while a
   turn of it is open (`open` on the grant). A prompt opens it, and only
   while the call that sent it still waits for that turn (`turn`): one the
@@ -190,11 +198,12 @@ settings, backups and failure records. Never upload `.local/`.
   session right after the turn, as when a background command that ended
   wakes it, whether the turn succeeded or failed. So before every request of
   a private session, read the session's messages (`turnState`): the request
-  is the turn's only while the turn's prompt is among them and no idle
-  marker follows it, which is the line `requestReview` draws afterwards. The
+  is the turn's only while the turn's prompt is among them and nothing that
+  ends its execution follows it (an idle marker, or a step the host
+  interrupted), which is the line `requestReview` draws afterwards. The
   prompt is known among them by the nonce it was sent with (`promptOf`),
   not by what a hook's event says. Before the prompt is a message, the
-  request is refused and the turn is still to come; after the marker the
+  request is refused and the turn is still to come; after that end the
   turn has ended, the grant closes, and what the host does now gets nothing.
   Where the messages cannot be read, refuse: there is no weaker rule to fall
   back on. Never tell the end of a turn by time, by a hook the host may not
@@ -1096,9 +1105,10 @@ through fallbacks.
 Run `npm ci` once, then `npm run check` and `npm test`; `npm run check` compiles the
 terminal panel's source and fails when `src/tui.js` differs. For changes touching hooks, sessions, tools, Azure access or
 publication, also run `node tests/host-v2-smoke.mjs <opencode binary>` (fresh and
-`--replace`), `node tests/host-v2-comment-scale.mjs <opencode binary>` and
-`node tests/host-v2-background-compaction.mjs <opencode binary>`, the last two
-also with `--cleanup`. The fixtures keep debug on to read its records, and
+`--replace`), `node tests/host-v2-comment-scale.mjs <opencode binary>`,
+`node tests/host-v2-background-compaction.mjs <opencode binary>` and
+`node tests/host-v2-decline.mjs <opencode binary>`, the scale and the
+background-compaction fixture also with `--cleanup`. The fixtures keep debug on to read its records, and
 debug keeps every private session: only the `--cleanup` runs, with debug off,
 exercise the deletion of a run's sessions on a real host.
 The smoke and the scale fixture also hold the forms of the host that the
@@ -1110,7 +1120,10 @@ from inside a hook (the prompt is among them by the turn's first request,
 with the nonce it was sent with, and no idle marker follows it while the
 turn runs), the assistant message that OpenCode names to a tool for a call,
 the error type of a used-up limit, a prompt that is one of AZPR's commands,
-and the line length the native read returns. When one of these steps fails
+and the line length the native read returns; the decline fixture holds the
+form of a step that a person ended by declining a shell request without a
+message (the host's error on its message, no idle marker after it, and the
+execution the host starts when something woke the session meanwhile). When one of these steps fails
 on another OpenCode, read that version's source before changing the step.
 Two kinds of fallback are behind them. Where the parts of a request cannot
 be told apart, or a message is not what the host builds of its own, the

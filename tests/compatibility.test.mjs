@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { parseReviewRequest } from '../src/output.mjs';
 import { PACKAGE_NAME, REPOSITORY, validateSettings } from '../src/config.mjs';
-import { hostCapabilities, retriesSteps, hostInstructions, isInstructionLoad, isInstructionUpdate, promptOf, turnState, withoutHostMessages, withoutPlaceInstructions, withPart, withoutTools, requestSlots, claudeInstructions, claudeOption, HOST_FACT_SOURCES, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER, isHostContinuation, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
+import { hostCapabilities, retriesSteps, hostInstructions, isInstructionLoad, isInstructionUpdate, promptOf, turnState, endsExecution, withoutHostMessages, withoutPlaceInstructions, withPart, withoutTools, requestSlots, claudeInstructions, claudeOption, HOST_FACT_SOURCES, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER, isHostContinuation, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
 
 test('request parser preserves Unicode, multiline text, quotes and literal metacharacters', () => {
   const url = 'https://dev.azure.com/org/project/_git/repo/pullrequest/12';
@@ -607,14 +607,48 @@ test('a request loses what the host wrote of instructions where it is as the hos
   }
 });
 
-test('a turn\'s prompt is the session\'s one message with its nonce, and the turn stands before it, runs, or has ended at the first idle marker after it', () => {
+test('an execution ends at the idle marker it leaves or at a step the host ended by an interrupt, and at nothing else', () => {
+  // OpenCode 2.3.0 to the tested version give a step they interrupted the error "Step interrupted" (type aborted),
+  // and that step ends its execution; no other error of an assistant message is of that type. A tool call that a
+  // person declined without a message carries their decline, and its step ends its execution too, also where the
+  // step's message carries an error that came first.
+  const tool = error => ({ type: 'tool', id: 'call_1', name: 'shell', state: { status: 'error', error } });
+  const declined = tool({ type: 'aborted', message: 'The user declined this tool call' });
+  assert.equal(endsExecution({ id: 'msg_idle', type: 'idle', outcome: 'failed' }), true);
+  assert.equal(endsExecution({ id: 'msg_step', type: 'assistant', finish: 'error', error: { type: 'aborted', message: 'Step interrupted' } }), true);
+  assert.equal(endsExecution({ id: 'msg_step', type: 'assistant', finish: 'error', error: { type: 'provider.invalid-output', message: 'unknown finish' }, content: [declined] }), true);
+  assert.equal(endsExecution({ id: 'msg_step', type: 'assistant', finish: 'tool-calls', content: [{ type: 'text', text: 'x' }, declined] }), true);
+  for (const message of [undefined, null, 'idle', { type: 'assistant' }, { type: 'assistant', finish: 'error', error: { type: 'provider.transport', message: 'cut' }, retry: { attempt: 2 } },
+    { type: 'assistant', error: 'aborted' }, { type: 'synthetic', error: { type: 'aborted' } }, { type: 'user', text: 'aborted' }, { type: 'compaction', status: 'failed' },
+    // A call the host stopped because its step failed or is tried again, a refusal with feedback, and other forms.
+    { type: 'assistant', finish: 'error', error: { type: 'provider.transport', message: 'cut' }, retry: { attempt: 2 }, content: [tool({ type: 'aborted', message: 'Tool execution interrupted' })] },
+    { type: 'assistant', finish: 'tool-calls', content: [tool({ type: 'permission.rejected', message: 'Not this command.' })] },
+    { type: 'assistant', content: [{ type: 'tool', state: { status: 'completed', error: { type: 'aborted', message: 'The user declined this tool call' } } }] },
+    { type: 'assistant', content: { 0: declined } }, { type: 'synthetic', content: [declined] }]) {
+    assert.equal(endsExecution(message), false, JSON.stringify(message));
+  }
+});
+
+test('a turn\'s prompt is the session\'s one message with its nonce, and the turn stands before it, runs, or has ended where the execution that took it ended', () => {
   const prompt = { id: 'msg_prompt', type: 'user', text: 'PROMPT', metadata: { azprGrant: 'nonce-2' } }, answer = { id: 'msg_answer', type: 'assistant' }, idle = id => ({ id, type: 'idle', outcome: 'succeeded' });
   const earlier = [{ id: 'msg_first', type: 'user', text: 'FIRST', metadata: { azprGrant: 'nonce-1' } }, { id: 'msg_first_answer', type: 'assistant' }, idle('msg_idle_1')];
+  const interrupted = id => ({ id, type: 'assistant', finish: 'error', error: { type: 'aborted', message: 'Step interrupted' },
+    content: [{ type: 'tool', id: 'call_1', name: 'shell', state: { status: 'error', error: { type: 'aborted', message: 'The user declined this tool call' } } }] });
   for (const [messages, state] of [
     [[], 'before'], [earlier, 'before'], [[...earlier, { id: 'msg_notice', type: 'synthetic', text: 'woke the session' }, { id: 'msg_idle_w', type: 'idle', outcome: 'failed' }], 'before'],
     [[...earlier, prompt], 'running'], [[...earlier, prompt, answer], 'running'], [[...earlier, prompt, answer, { id: 'msg_notice', type: 'synthetic', text: 'reached it while it went idle' }, answer], 'running'],
     [[...earlier, prompt, answer, idle('msg_idle_2')], 'ended'], [[...earlier, prompt, { id: 'msg_idle_2', type: 'idle', outcome: 'interrupted' }], 'ended'],
     [[...earlier, prompt, answer, idle('msg_idle_2'), { id: 'msg_notice', type: 'synthetic', text: 'woke it' }], 'ended'],
+    // A step the host interrupted ends its execution, whether a marker follows it (a person's stop) or none does (a
+    // person declined one of its tool calls without a message, an end the host records as a shutdown), and
+    // whatever another execution wrote after it.
+    [[...earlier, prompt, interrupted('msg_step')], 'ended'], [[...earlier, prompt, answer, interrupted('msg_step'), { id: 'msg_idle_2', type: 'idle', outcome: 'interrupted' }], 'ended'],
+    [[...earlier, prompt, answer, interrupted('msg_step'), { id: 'msg_notice', type: 'synthetic', text: 'woke the session' }, answer], 'ended'],
+    // A declined step whose message carries an error that came first in it (a finish reason the host did not know).
+    [[...earlier, prompt, { ...interrupted('msg_step'), error: { type: 'provider.invalid-output', message: 'unknown finish' } }, { id: 'msg_notice', type: 'synthetic', text: 'woke the session' }], 'ended'],
+    // A step the host retries is no such end, nor is an interrupted step of an earlier turn.
+    [[...earlier, prompt, { id: 'msg_cut', type: 'assistant', finish: 'error', error: { type: 'provider.transport', message: 'cut' }, retry: { attempt: 2 } }], 'running'],
+    [[earlier[0], interrupted('msg_old'), prompt, answer], 'running'],
   ]) {
     const found = promptOf(messages, 'nonce-2');
     assert.deepEqual([found?.id, turnState(messages, found)], [state === 'before' ? undefined : 'msg_prompt', state], JSON.stringify(messages.map(message => message.id)));

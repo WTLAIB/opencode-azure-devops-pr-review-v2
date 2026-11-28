@@ -22,6 +22,11 @@ export const TESTED_HOST_VERSION = '2.4.2';
 // interrupted step instead and queues nothing (see `retriedSteps` in session.mjs).
 export const HOST_CONTINUATION_TEXT = 'The previous response was interrupted. Continue from where you left off without repeating completed content.';
 
+// The error OpenCode 2.3.0 to the tested version give a tool call that a person declined without a message, with
+// the type `aborted`. They write it only for such a decline while the session's location is open, and that decline
+// ends the step's execution (see `endsExecution`).
+export const HOST_DECLINE_TEXT = 'The user declined this tool call';
+
 // Context message types that mean someone other than the admitted prompt
 // changed the conversation. Unknown future types are tolerated.
 export const FOREIGN_MESSAGE_TYPES = Object.freeze(['user', 'synthetic', 'agent-switched', 'model-switched', 'location-switched', 'shell', 'skill']);
@@ -596,18 +601,30 @@ export function promptOf(messages, nonce) {
 
 /**
  * Where a turn stands, by the session's own messages: `before` while the turn's prompt is not among them,
- * `running` while no idle marker follows it, and `ended` once one does. An execution leaves one marker when it
- * ends, before the host starts another one, except where the host records that end as a shutdown: its own
- * shutdown, which ends the run with the process, and the end of a step that ended because a person declined one
- * of its tool calls without a message, since the host records an interrupt that nobody asked for as a shutdown
- * (OpenCode 2.3.0 to the tested version). After such a decline the turn stays `running` until a later execution
- * leaves a marker, a known limitation (docs/VALIDATION.md#known-limitations); `requestReview` accepts no answer
- * of it.
+ * `running` while nothing that ends its execution follows it (`endsExecution`), and `ended` once something does.
+ * `requestReview` draws the same line afterwards.
  */
 export function turnState(messages, prompt) {
   const at = prompt ? messages.indexOf(prompt) : -1;
   if (at < 0) return 'before';
-  return messages.slice(at + 1).some(message => message?.type === 'idle') ? 'ended' : 'running';
+  return messages.slice(at + 1).some(endsExecution) ? 'ended' : 'running';
+}
+
+/**
+ * Whether a message of a session ends the execution it belongs to. An execution ends at the idle marker it leaves,
+ * or at a step that OpenCode 2.3.0 to the tested version end by an interrupt: a step whose message carries their
+ * error of type `aborted` ("Step interrupted"; they give no other assistant message that type), and a step in which a
+ * person declined one of its tool calls without a message, whose message may carry an error that came first in that
+ * step (that call carries their decline, `HOST_DECLINE_TEXT`). After such a step a person's stop and a failure leave
+ * their marker; a decline leaves none, since they record an interrupt that nobody asked for as a shutdown, and they
+ * run on: where something woke the session meanwhile, they start another execution at once. A marker after such a
+ * step may be that later execution's.
+ */
+export function endsExecution(message) {
+  if (message?.type === 'idle') return true;
+  if (message?.type !== 'assistant') return false;
+  return message.error?.type === 'aborted' || (Array.isArray(message.content) && message.content.some(part =>
+    part?.type === 'tool' && part.state?.status === 'error' && part.state.error?.type === 'aborted' && part.state.error.message === HOST_DECLINE_TEXT));
 }
 
 /** Throw one readable error naming every missing host method. */

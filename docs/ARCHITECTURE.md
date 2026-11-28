@@ -1047,34 +1047,46 @@ message, so this rests on the host's metadata; with `shell: "deny"`, the
 default, a private role has no shell call and no such notice is accepted.
 
 **A turn, and what is open during it.** A turn is the admitted prompt and
-what follows it up to the first idle marker; its answer is the last assistant
-message before that marker, and that marker says how the turn ended. This
-follows how OpenCode 2.3.0 to the tested version run a session. A prompt that is
-admitted waits in the session's inbox and becomes a message only in the
-execution that takes it. An execution is one busy period: it goes on while
-input reaches the session, and leaves one marker when it ends, however it
-ends, unless the host records that end as a shutdown (below). So the first
-marker after the prompt is the end of the execution that had the prompt, also
-where the model never answered (the turn was interrupted or failed), and what
-another execution wrote after it is not the turn's: a command that ended
-later woke the session, and neither what the host wrote then nor how that
-ended changes the answer. The session's own outcome is the one its latest
-marker recorded, which can be that later execution's.
+what follows it up to the end of the execution that took it; its answer is
+the last assistant message before that end, and the end says how the turn
+ended. This follows how OpenCode 2.3.0 to the tested version run a session. A
+prompt that is admitted waits in the session's inbox and becomes a message
+only in the execution that takes it. An execution is one busy period: it goes
+on while input reaches the session, and ends at the first of these
+(`endsExecution` in `host.mjs`): the idle marker it leaves, or a step the
+host ended by an interrupt. Such a step's message carries the host's error
+of type `aborted` ("Step interrupted"; the host gives no other assistant
+message that type), or, where another error came first in that step (a
+finish reason the host does not know, say), the call a person declined
+carries the host's decline. So the first end after the prompt is the end of
+the execution that had the prompt, also where the model never answered (the
+turn was interrupted or failed), and what another execution wrote after it
+is not the turn's: a command that ended later woke the session, and neither
+what the host wrote then nor how that ended changes the answer. A marker
+after an interrupted step may be such a later execution's, so the turn's
+outcome is `interrupted` whatever follows that step. The session's own
+outcome is the one its latest marker recorded, which can be that later
+execution's. A host that wrote such a signal and went on would end a turn
+early, which fails it; one that ended an execution with neither a marker nor
+such a signal would leave the turn open until a later marker. The decline
+fixture holds these forms on the tested host.
 
-The host records two ends as a shutdown and leaves no marker for them. Its
-own shutdown ends the run with the process. The other is a known limitation:
-that of a step that ended because a person declined one of its tool calls
-without a message (with `shell: "ask"`, and with `"inherit"` where OpenCode's
-own rules ask, a shell request can ask a person; OpenCode's full-screen
-terminal UI and its desktop app decline in AZPR's sessions without a
-message, `opencode mini` asks for one). The first
-marker after the turn's prompt is then a later execution's, if one comes,
-and until then what the session does while the grant is open counts to the
-turn: the model requests and tool calls of whatever execution the host
-starts in it, and what those calls return (comment planning, for one, can
-hand it to a later session of the same page). The host has given the
-declined step's message an error ("Step interrupted"), so AZPR takes no
-answer of that turn. A decline with a message is the command's result
+The host leaves no marker for an end it records as a shutdown. Its own
+shutdown ends the run with the process. The other is the end of a step that
+a person ended by declining one of its tool calls without a message (with
+`shell: "ask"`, and with `"inherit"` where OpenCode's own rules ask, a shell
+request can ask a person; OpenCode's full-screen terminal UI and its desktop
+app decline in AZPR's sessions without a message, `opencode mini` asks for
+one). The host interrupts that step and runs on: where something woke the
+session meanwhile (the notice of a background command that ended, say), it
+starts another execution at once. The interrupted step is the turn's end all
+the same: the first request the host prepares afterwards is refused, the
+grant closes, and that execution gets nothing. The turn fails as interrupted
+(`failure=permanent`) and is not tried in a new session, since a person
+declined what it asked for: a reviewer's first turn fails its pass, and a
+correction or follow-up turn leaves the answer before it standing. What a
+planning turn's tools returned before that step stays recorded, as for any
+failed planning turn. A decline with a message is the command's result
 instead: the model receives the message and goes on.
 
 A grant is open only during a turn: outside it the `context` hook refuses a
@@ -1090,15 +1102,16 @@ and OpenCode's wait also covers an execution that it starts right after the
 turn's, as when such a notice arrives in that moment, whether the turn
 succeeded or failed. So before every request of a private session the
 `context` hook reads the session's own messages and lets the request through
-only where the turn's prompt is among them and no idle marker follows it
-(`turnState` in `host.mjs`), which is the line `requestReview` draws
-afterwards. The prompt is known among them by the nonce it was sent with
-(`promptOf`). Before the prompt is a message, the request is refused and the
-turn is still to come. Where input reached the session while it was going
-idle, the same execution goes on with it, no marker stands there yet, and the
-model's next message is the turn's answer. Where the execution had ended, its
-marker is there before the host starts another one, the request is refused
-and the grant closes. So a session that the host wakes by itself asks no
+only where the turn's prompt is among them and nothing that ends its
+execution follows it (`turnState` in `host.mjs`), which is the line
+`requestReview` draws afterwards. The prompt is known among them by the nonce
+it was sent with (`promptOf`). Before the prompt is a message, the request is
+refused and the turn is still to come. Where input reached the session while
+it was going idle, the same execution goes on with it, no marker stands there
+yet, and the model's next message is the turn's answer. Where the execution
+had ended, its end (its marker, or the step the host interrupted) is there
+before the host starts another one, the request is refused and the grant
+closes. So a session that the host wakes by itself asks no
 model and reads nothing. Where the messages cannot be read, the request is
 refused. What follows a request (the request itself, a retry of it, the tool
 calls of its answer) needs a request of this very turn that was looked at so.
