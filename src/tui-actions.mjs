@@ -36,6 +36,30 @@ const byBeginning = (query, options) => {
   return typed ? options.filter(option => String(option.title).toLowerCase().startsWith(typed)) : [...options];
 };
 
+// A query that is a finding's ID as reviews write them (`F-12`; reviews of 0.4.x also `R-` and `Q-`): ASCII letters,
+// a hyphen and digits, as typed.
+const ID_QUERY = /^[A-Za-z]+-\d+$/;
+// Words are compared in lower case, with a Greek final sigma taken for a sigma: lower case gives a sigma at the end of
+// what was typed another form than within a word, so the start of a word would miss the title that holds it.
+const fold = text => String(text ?? '').toLowerCase().replace(/ς/g, 'σ');
+
+/**
+ * How the list of findings answers to what is typed into its search line. An ID typed in full lists the finding
+ * of that ID alone, and no row where the list holds none: a finding that is not offered is not stood in for by
+ * one whose ID or text holds those characters; a word of that form (`UTF-8`) is taken for an ID too. Anything else
+ * lists the rows whose title holds every word typed, wherever it stands, in the order they are listed; nothing
+ * typed lists them all. Only the titles are searched, not what a row shows beside them. There a person looks for one of
+ * many, by its ID or by a word of it. The host's own search lists the best match first: among twelve findings `F-1`
+ * listed F-11 first, and Enter took it.
+ */
+const byWords = (query, options) => {
+  const typed = String(query ?? '').trim();
+  if (!typed) return [...options];
+  if (ID_QUERY.test(typed)) return options.filter(option => String(option.value).toUpperCase() === typed.toUpperCase());
+  const words = fold(typed).split(/\s+/);
+  return options.filter(option => { const title = fold(option.title); return words.every(word => title.includes(word)); });
+};
+
 /** The level the review itself gave a finding. */
 const own = finding => finding.original ?? finding.severity;
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -184,13 +208,15 @@ export function createActions(host) {
       const applied = new Promise(resolve => { apply = resolve; });
       const foot = command && typeof dialog.clear === 'function'
         ? [{ bind: APPLY_KEY, title: 'apply', side: 'right', selection: 'none', onTrigger: () => { if (!listed) return; listed = false; apply(APPLY); dialog.clear(); } }] : undefined;
-      const choice = await Promise.race([applied, dialog.select({ title: 'Adjust the findings before posting', placeholder: 'Search findings', current: last, options: [
+      // The list is searched by its own `search`, which the host draws without category headings, showing a row's
+      // category on its right in place of its footer: the rows carry none, so that the level stays in view.
+      const choice = await Promise.race([applied, dialog.select({ title: 'Adjust the findings before posting', placeholder: 'Search findings', current: last, search: byWords, options: [
         ...next.findings.map(finding => {
           const level = adjustments.levels.get(finding.id) ?? own(finding);
-          return { title: `${finding.id}${finding.summary ? ` — ${finding.summary}` : ''}`, value: finding.id, category: 'Findings',
+          return { title: `${finding.id}${finding.summary ? ` — ${finding.summary}` : ''}`, value: finding.id,
             footer: adjustments.excluded.has(finding.id) ? 'left out' : level === own(finding) ? level : `${level} (was ${own(finding)})` };
         }),
-        ...(command ? [{ title: next.plan ? 'Apply, and plan the preview' : 'Apply, and plan the preview again', value: APPLY, description: describeChanges(next, adjustments), category: 'Then' }] : [])],
+        ...(command ? [{ title: next.plan ? 'Apply, and plan the preview' : 'Apply, and plan the preview again', value: APPLY, description: describeChanges(next, adjustments) }] : [])],
         ...(foot ? { actions: foot } : {}) })]);
       listed = false;
       if (choice === undefined || stopped) return;
