@@ -643,9 +643,12 @@ try {
   await click('Adjust findings…');
   await see(/Adjust the findings before posting/, 'A click did not open the list of findings.');
   assert.doesNotMatch(screen(), /Apply, and plan the preview|apply ctrl\+s/, 'Something is to apply before anything was changed.');
-  // Typing filters the list; the finding typed in full comes first.
+  // Typing filters the list by AZPR's own search; the finding typed in full comes first. The host draws a list
+  // searched that way without category headings, and the row still shows its level.
   type('F-1');
-  await see(/Findings[^\n]*\n[^\n]*F-1 — `invoice` drops the guard\b[^\n]* high\b/, 'Typing does not filter the findings.');
+  await see(/F-1 — `invoice` drops the guard\b[^\n]* high\b/, 'Typing does not filter the findings, or the row does not show its level.');
+  assert.doesNotMatch(screen(), /F-2 — /, 'Typing did not filter the findings.');
+  assert.doesNotMatch(screen(), /Findings[^\n]*\n[^\n]*F-1 — /, 'The list of findings was not searched by AZPR\'s own search: it still has its category heading.');
   key('Enter');
   await see(/F-1: how is it published\?/, 'Picking a finding did not ask what happens to it.');
   // The level the review gave it is the rating's: its reviewer filed it as medium.

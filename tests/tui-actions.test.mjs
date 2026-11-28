@@ -135,10 +135,13 @@ test('findings are adjusted in a list: each pick says what happens to one, and i
   // The list: every finding with how it is published now and, once something differs, what applying would do,
   // after them: where the list was read to.
   const [first, , second, , , , last] = h.shown;
-  assert.deepEqual(first.options.map(option => [option.title, option.footer, option.category]), [['F-1 — reserve can leave stock decremented', 'medium', 'Findings'],
-    ['R-2 — snapshot returns live state', 'high', 'Findings'], ['F-3 — ordering uses local time', 'low', 'Findings']], 'Nothing to apply yet: Escape leaves the list.');
-  assert.deepEqual([second.current, second.options.at(-1).title, second.options.at(-1).description, second.options.at(-1).category, second.options[0].footer],
-    ['F-1', 'Apply, and plan the preview again', 'F-1 left out', 'Then', 'left out'], 'The list comes back on the finding that was changed.');
+  assert.deepEqual(first.options.map(option => [option.title, option.footer]), [['F-1 — reserve can leave stock decremented', 'medium'],
+    ['R-2 — snapshot returns live state', 'high'], ['F-3 — ordering uses local time', 'low']], 'Nothing to apply yet: Escape leaves the list.');
+  assert.deepEqual([second.current, second.options.at(-1).title, second.options.at(-1).description, second.options[0].footer],
+    ['F-1', 'Apply, and plan the preview again', 'F-1 left out', 'left out'], 'The list comes back on the finding that was changed.');
+  // The list is searched by its own `search`, which the host draws flat, with a row's category in place of its
+  // footer: no row carries a category, so that its level stays in view.
+  assert.deepEqual(h.shown.filter((dialog, index) => index % 2 === 0).flatMap(dialog => dialog.options).filter(option => 'category' in option), []);
   assert.deepEqual([last.options.at(-1).description, last.options.slice(0, -1).map(option => option.footer)], ['F-1 left out, R-2 as low', ['left out', 'low (was high)', 'low']],
     'A level that is the review\'s own is no change.');
   assert.deepEqual(h.shown.filter(dialog => 'actions' in dialog), [], 'A host that cannot close a dialog gets no action at its foot.');
@@ -395,8 +398,52 @@ test('what is typed into a question answers by the beginning of a row: a step\'s
   assert.deepEqual(titles(posting, ''), ['No, post nothing', 'Yes, post 4 comments']);
   for (const stray of ['p', 'pp', 'o', 's']) assert.deepEqual(titles(posting, stray), [], stray);
   assert.deepEqual([titles(posting, 'y'), titles(posting, 'n')], [['Yes, post 4 comments'], ['No, post nothing']]);
-  // The lists of findings and of a finding's levels are searched as the host searches: there a person looks for one of many.
-  const list = host([undefined]);
+  // A finding's levels are searched as the host searches; the list of findings has a search of its own (below).
+  const list = host(['F-1', undefined, undefined]);
   await list.actions.run('adjust', offer(), SESSION);
-  assert.equal('search' in list.shown[0], false);
+  assert.equal(typeof list.shown[0].search, 'function');
+  assert.equal('search' in list.shown[1], false);
+});
+
+test('what is typed into the list of findings: an ID finds that finding alone, words find the rows that hold them, in the order they are listed', async () => {
+  // Twelve findings: the host's own search listed F-11, F-10, F-12, F-1 for "F-1", F-11 selected, and Enter took it.
+  const findings = Array.from({ length: 12 }, (_, index) => ({ id: `F-${index + 1}`, severity: 'medium',
+    summary: index === 10 ? 'token leaks into the log' : index === 2 ? 'the same guard as F-1 is missing' : `check number ${index + 1} is skipped` }));
+  const listed = async rows => { const h = host([undefined]); await h.actions.run('adjust', offer({}, rows), SESSION); return h.shown[0]; };
+  const list = await listed(findings);
+  const ids = (query, dialog = list) => dialog.search(query, dialog.options).map(option => option.value);
+  assert.deepEqual(ids(''), findings.map(finding => finding.id), 'Nothing typed: every row, in the order they are listed.');
+  assert.ok(list.search('', list.options).every((option, index) => option === list.options[index]), 'The rows themselves.');
+  // An ID typed in full: that finding alone, whatever else holds those characters (F-10 to F-12, a summary naming F-1).
+  for (const finding of findings) {
+    for (const typed of [finding.id, finding.id.toLowerCase(), `  ${finding.id} `]) assert.deepEqual(ids(typed), [finding.id], JSON.stringify(typed));
+  }
+  // Also where those with a longer ID are listed before it, and for the IDs of reviews of 0.4.x.
+  const reversed = await listed([...findings].reverse());
+  assert.deepEqual(ids('F-1', reversed), ['F-1']);
+  assert.deepEqual(ids('r-2', await listed([{ id: 'F-1', severity: 'medium', summary: 'a' }, { id: 'R-2', severity: 'high', summary: 'b' }, { id: 'R-21', severity: 'low', summary: 'c' }])), ['R-2']);
+  // An ID that no row has lists nothing: no other finding stands in for one that is not offered.
+  const withoutFirst = await listed(findings.slice(1));
+  assert.deepEqual([ids('F-1', withoutFirst), ids('F-13')], [[], []]);
+  // Words find the rows that hold all of them, anywhere in the title, in the order they are listed.
+  assert.deepEqual(ids('token'), ['F-11']);
+  assert.deepEqual(ids('LOG token'), ['F-11']);
+  assert.deepEqual(ids('number 1 skipped'), ['F-1', 'F-10', 'F-12']);
+  assert.deepEqual(ids('F-2 check'), ['F-2']);
+  assert.deepEqual(ids('guard'), ['F-3']);
+  assert.deepEqual(ids('F-1 guard'), ['F-3'], 'An ID typed with words is a word: only the summary that names F-1 holds both.');
+  assert.deepEqual(ids('F-'), findings.map(finding => finding.id));
+  assert.deepEqual(ids('nothing like this'), []);
+  // The step's key pressed once more than meant is typed into the list it opened, which has nothing to apply yet:
+  // it lands on a finding, whose levels are asked next.
+  assert.deepEqual(ids('a'), ['F-3', 'F-11']);
+  // Once something changed, the row that applies it is listed last and found by its own words.
+  const changed = host(['F-1', options => value(options, 'Leave it out'), undefined]);
+  await changed.actions.run('adjust', offer({}, findings), SESSION);
+  const again = changed.shown[2];
+  const titles = query => again.search(query, again.options).map(option => option.title);
+  assert.equal(titles('').at(-1), 'Apply, and plan the preview again');
+  assert.deepEqual(titles('apply'), ['Apply, and plan the preview again']);
+  assert.deepEqual(titles('a'), ['F-3 — the same guard as F-1 is missing', 'F-11 — token leaks into the log', 'Apply, and plan the preview again']);
+  assert.equal(again.options[0].footer, 'left out');
 });
