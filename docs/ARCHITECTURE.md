@@ -1609,8 +1609,8 @@ answers by the list's own `search` (`byWords`): an ID typed in full (ASCII
 letters, a hyphen and digits, which a word such as `UTF-8` is too) lists the
 finding of that ID alone, and no row where the list has none, so that no other
 finding stands in for one that is not offered; anything else lists the rows
-whose title holds every word typed, compared without regard to case, in the
-order of the list. Only titles are searched, not what a row shows beside them.
+whose title holds every word typed, compared in lower case with a Greek final
+sigma taken for a sigma, in the order of the list. Only titles are searched, not what a row shows beside them.
 Among twelve findings the host's search listed F-11 first for `F-1`, and Enter
 took it. OpenCode 2.3.0 to the tested version show a list with a search of its
 own as that search returns it, without category headings, and show a row's

@@ -433,10 +433,13 @@ test('what is typed into the list of findings: an ID finds that finding alone, w
   assert.deepEqual(ids('guard'), ['F-3']);
   assert.deepEqual(ids('F-1 guard'), ['F-3'], 'An ID typed with words is a word: only the summary that names F-1 holds both.');
   assert.deepEqual(ids('F-'), findings.map(finding => finding.id));
+  // A word of an ID's form with a longer prefix is taken for an ID too, and finds no title; with another word it is a word.
+  const encoded = await listed([{ id: 'F-1', severity: 'medium', summary: 'a' }, { id: 'F-3', severity: 'low', summary: 'invalid UTF-8 input' }]);
+  assert.deepEqual([ids('UTF-8', encoded), ids('utf-8 input', encoded)], [[], ['F-3']]);
   assert.deepEqual(ids('nothing like this'), []);
   // Only titles are searched: not the level a row shows beside its title.
   assert.deepEqual(ids('medium'), []);
-  // Letters compare without regard to case wherever they stand in a word: a Greek sigma typed at the end of what was
+  // Letters compare in lower case wherever they stand in a word: a Greek sigma typed at the end of what was
   // typed still finds the title that holds it within a word, in either case; a German sharp s in either case; and a
   // word of letters, a hyphen and digits that are not all ASCII is no ID.
   const words = await listed([{ id: 'F-1', severity: 'medium', summary: 'ΣΥΣΤΗΜΑ χωρίς έλεγχο' }, { id: 'F-2', severity: 'low', summary: 'Größe of a sınıf-1 buffer' }]);
@@ -453,6 +456,8 @@ test('what is typed into the list of findings: an ID finds that finding alone, w
   const titles = query => again.search(query, again.options).map(option => option.title);
   assert.equal(titles('').at(-1), 'Apply, and plan the preview again');
   assert.deepEqual(titles('apply'), ['Apply, and plan the preview again']);
+  // What the row that applies says beside its title is not searched: "left out" finds no row, so Enter applies nothing.
+  assert.deepEqual(titles('left out'), []);
   assert.deepEqual(titles('a'), ['F-3 — the same guard as F-1 is missing', 'F-11 — token leaks into the log', 'Apply, and plan the preview again']);
   assert.equal(again.options[0].footer, 'left out');
 });

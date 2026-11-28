@@ -829,8 +829,8 @@ settings, backups and failure records. Never upload `.local/`.
   a word such as `UTF-8` is too) lists the finding of that ID alone, and no
   row where the list has none, so that no other finding stands in for one
   that is not offered; anything else lists the rows whose title holds every
-  word typed, compared without regard to case, in the order the findings are
-  listed. The host's search listed F-11 first for `F-1` among twelve
+  word typed, compared in lower case with a Greek final sigma taken for a
+  sigma, in the order the findings are listed. The host's search listed F-11 first for `F-1` among twelve
   findings, and Enter took it. OpenCode 2.3.0 to the tested version show a
   list with a search of its own as that search returns it, without category
   headings, and show a row's category in place of its footer, so those rows
