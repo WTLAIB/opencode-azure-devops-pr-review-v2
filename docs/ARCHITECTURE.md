@@ -1618,8 +1618,19 @@ host's search finds a letter anywhere in a title and selects the best match,
 and the key that opened the question, pressed once more than meant, is typed
 into it. `s` is in "Yes, stop it" and not in "No, let it run", so the host's
 search would leave "yes" as the only row for Enter to take; by the beginning
-of a title it leaves none. Adjusting lists the findings;
-picking one chooses its level or leaves it out, and everything is applied
+of a title it leaves none. Adjusting lists the findings. What is typed there
+answers by the list's own `search` (`byWords`): an ID typed in full (ASCII
+letters, a hyphen and digits, which a word such as `UTF-8` is too) lists the
+finding of that ID alone, and no row where the list has none, so that no other
+finding stands in for one that is not offered; anything else lists the rows
+whose title holds every word typed, compared in lower case with a Greek final
+sigma taken for a sigma, in the order of the list. Only titles are searched, not what a row shows beside them.
+Among twelve findings the host's search listed F-11 first for `F-1`, and Enter
+took it. OpenCode 2.3.0 to the tested version show a list with a search of its
+own as that search returns it, without category headings, and show a row's
+category in place of its footer, so the rows have none and keep showing their
+level. Picking a finding chooses its level or leaves it out, and everything is
+applied
 with one command that gives both lists in full, since each list of
 `/pr-comment` replaces the saved one. It is applied from the foot of that
 dialog (`DialogSelectOptions.actions`, `ctrl+s` or a click), which stays in
