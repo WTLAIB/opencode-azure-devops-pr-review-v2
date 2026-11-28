@@ -671,6 +671,74 @@ test('failure classification drives stage retries and shard splitting', () => {
   assert.equal(classifyFailure(failure({ terminalOutcome: 'interrupted', interrupted: true })), 'permanent');
   assert.equal(classifyFailure(Object.assign(new Error('x'), { contextChanged: true })), 'transient');
   assert.equal(classifyFailure(new Error('bad request')), 'permanent');
+  // A response that reached the model's output limit: after a person's interrupt, a used-up limit and a provider
+  // failure that ended the turn.
+  assert.equal(classifyFailure(failure({ terminalOutcome: 'failed', outputLimit: true })), 'output-limit');
+  assert.equal(classifyFailure(failure({ terminalOutcome: 'failed', outputLimit: true, provider: { status: 503 } })), 'transient');
+  assert.equal(classifyFailure(failure({ terminalOutcome: 'failed', outputLimit: true, provider: { status: 401 } })), 'permanent');
+  assert.equal(classifyFailure(failure({ terminalOutcome: 'interrupted', interrupted: true, outputLimit: true })), 'permanent');
+  assert.equal(classifyFailure(failure({ terminalOutcome: 'failed', outputLimit: true, provider: { exhausted: 'provider.quota' } })), 'permanent');
+  assert.equal(classifyFailure(failure({ terminalOutcome: 'failed', outputLimit: true, compaction: 'failed' })), 'overflow');
+  assert.equal(classifyFailure(Object.assign(new Error('x'), { outputLimit: true, contextChanged: true })), 'output-limit');
+});
+
+test('a response that reached the model\'s output limit fails its turn as output-limit, never for another message', async () => {
+  const prompt = { id: 'msg_input', type: 'user', text: input };
+  const cut = (id, extra = {}) => assistant({ id, finish: 'length', content: [{ type: 'text', text: '{"status":"COMPLETE","cov' }], ...extra });
+  // What OpenCode 2.3.0 to the tested version write after such a step when nothing else is pending; AZPR does not
+  // look at it for this.
+  const notice = id => ({ id, type: 'synthetic', text: 'Your last response hit the output token limit (stop reason: length). Do not apologize, recap, or repeat yourself. Break the remaining work into smaller pieces.' });
+  const run = (messages, session = {}) => requestReview(host({ context: async () => messages,
+    get: async () => ({ id: sessionID, outcome: 'succeeded', agent: 'azpr-review-functional', model, ...session }) }).context, { sessionID, text: input })
+    .then(() => assert.fail('A turn that reached the output limit was accepted.'), error => error);
+  // Continued once, and the rest answered: the marker says the turn succeeded.
+  const continued = await run([prompt, cut('msg_cut'), notice('msg_limit'), assistant(), idle()]);
+  assert.deepEqual([continued.outputLimit, continued.contextChanged, classifyFailure(continued)], [true, undefined, 'output-limit']);
+  assert.match(continued.message, /^\[AZPR\] A response of this turn reached the model's output limit \(finish=length\)\. No output of the turn was accepted\.$/);
+  // Continued twice and cut a third time: OpenCode fails the step.
+  const exhausted = await run([prompt, cut('msg_cut1'), notice('msg_limit1'), cut('msg_cut2'), notice('msg_limit2'), cut('msg_cut3'), { ...idle(), outcome: 'failed' }], { outcome: 'failed' });
+  assert.deepEqual([exhausted.execution.outputLimit, exhausted.execution.lastFinish, classifyFailure(exhausted)], [true, 'length', 'output-limit']);
+  assert.match(exhausted.message, /^\[AZPR\] A response of this turn reached the model's output limit \(finish=length\)\. Reviewer execution did not finish successfully /);
+  // Someone else's message as well, before the prompt or in the turn: the turn's own outcome decides.
+  const foreign = { id: 'msg_foreign', type: 'synthetic', text: 'posted by someone else' };
+  for (const messages of [[foreign, prompt, cut('msg_cut'), notice('msg_limit'), assistant(), idle()], [prompt, foreign, cut('msg_cut'), notice('msg_limit'), assistant(), idle()]]) {
+    assert.equal(classifyFailure(await run(messages)), 'output-limit');
+  }
+  // A step cut in a tool call goes on without OpenCode's message; the turn reached the limit all the same.
+  const inCall = await run([prompt, cut('msg_tool', { content: [{ type: 'tool', id: 'tool_0', name: 'azpr_read_file', state: { status: 'error', error: { type: 'unknown', message: 'cut' } } }] }), assistant(), idle()]);
+  assert.equal(classifyFailure(inCall), 'output-limit');
+  // Where a later response ended the turn otherwise, that ending decides, as before: a person's interrupt, a used-up
+  // provider limit, a refused key (none of them split over new sessions), a stream that broke after its HTTP 200, a
+  // provider's filter (both tried once more in a new session).
+  const ended = (error, finish = 'error') => run([prompt, cut('msg_cut'), notice('msg_limit'), assistant({ finish, error }), { ...idle(), outcome: 'failed' }], { outcome: 'failed' });
+  const stopped = await run([prompt, cut('msg_cut'), notice('msg_limit'), assistant({ finish: 'error', error: { type: 'aborted', message: 'Step interrupted' } })], { outcome: 'interrupted' });
+  assert.deepEqual([stopped.execution.interrupted, stopped.execution.outputLimit, classifyFailure(stopped)], [true, undefined, 'permanent']);
+  const usedUp = await ended({ type: 'provider.quota', message: 'quota' });
+  assert.deepEqual([usedUp.execution.outputLimit, classifyFailure(usedUp)], [undefined, 'permanent']);
+  assert.match(usedUp.message, /The provider reports the usage quota as used up/);
+  const refused = await ended({ type: 'provider.auth', status: 401, message: 'expired' });
+  assert.deepEqual([refused.execution.outputLimit, refused.execution.provider.status, classifyFailure(refused)], [undefined, 401, 'permanent']);
+  const broken = await ended({ type: 'provider.transport', status: 200, message: 'stream broke' });
+  assert.deepEqual([broken.execution.outputLimit, classifyFailure(broken)], [undefined, 'transient']);
+  assert.doesNotMatch(broken.message, /output limit/);
+  const filtered = await ended({ type: 'provider.content-filter', message: 'blocked' }, 'content-filter');
+  assert.deepEqual([filtered.execution.outputLimit, classifyFailure(filtered)], [undefined, 'transient']);
+  // Without such a response the turn is judged as before: that text alone is someone else's message.
+  const alone = await run([prompt, notice('msg_limit'), assistant(), idle()]);
+  assert.deepEqual([alone.outputLimit, alone.contextChanged, classifyFailure(alone)], [undefined, true, 'transient']);
+  // Only this turn's responses count: one of the turn before (up to its marker), or one after this turn's marker
+  // (a later execution), says nothing about it.
+  // A compaction attempted in a cut turn says the context was full, also where the turn's marker says it succeeded.
+  const compacted = await run([prompt, cut('msg_cut'), notice('msg_limit'), { id: 'cmp_1', type: 'compaction', status: 'failed' }, assistant(), idle()]);
+  assert.deepEqual([compacted.outputLimit, compacted.execution?.compaction, classifyFailure(compacted)], [true, 'failed', 'overflow']);
+  // A cut turn whose turn before is gone fails for the cut: its own outcome comes first.
+  const orphan = await requestReview(host({ context: async () => [prompt, cut('msg_cut'), notice('msg_limit'), assistant(), idle()] }).context, { sessionID, text: input, since: 'msg_gone' })
+    .then(() => assert.fail('accepted'), error => error);
+  assert.deepEqual([orphan.outputLimit, orphan.contextChanged, classifyFailure(orphan)], [true, undefined, 'output-limit']);
+  const accepted = (messages, since) => requestReview(host({ context: async () => messages }).context, { sessionID, text: input, since });
+  const before = [{ id: 'msg_old', type: 'user', text: 'the turn before' }, cut('msg_old_cut'), { ...idle(), id: 'msg_old_idle', outcome: 'failed' }];
+  assert.equal((await accepted([...before, prompt, assistant(), idle()], 'msg_old')).parts[0].text, '{"status":"COMPLETE"}');
+  assert.equal((await accepted([prompt, assistant(), idle(), cut('msg_later')])).parts[0].text, '{"status":"COMPLETE"}');
 });
 
 test('a model that restarts its answer after a stream interruption keeps only the restarted text', async () => {

@@ -37,6 +37,8 @@ jobs:
         run: node tests/host-v2-background-compaction.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode"
       - name: Exercise shell requests that a person declines, with and without a message
         run: node tests/host-v2-decline.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode"
+      - name: Exercise a reviewer's answer that reaches the model's output limit, split and not split
+        run: node tests/host-v2-output-limit.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode"
       - name: Exercise the scale review with debug off, where each run deletes its sessions when it ends
         run: node tests/host-v2-comment-scale.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode" --cleanup
       - name: Exercise reviews with debug off, one saved and one unfinished, which keep only the session holding their report

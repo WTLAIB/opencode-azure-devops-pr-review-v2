@@ -152,7 +152,14 @@ settings, backups and failure records. Never upload `.local/`.
   the turn's model was sent it: after the prompt, and between the turn
   before and the prompt (`since`; before a session's first prompt too). A
   turn that did not succeed fails by its own outcome first, which decides
-  whether it is tried again. A message of the host passes only where it is
+  whether it is tried again. A response of the turn that reached the model's
+  output limit is its own outcome too: AZPR goes by the finish the host
+  records on that assistant message (`OUTPUT_LIMIT_FINISH`), not by what the
+  host writes into the session after it, and the turn fails as
+  `output-limit`, unless a compaction attempted in the turn says its context
+  was full or a later response ended it otherwise (a person's interrupt, a
+  provider's error), which decides as before. A message of the host passes
+  only where it is
   one of those above, or the late result of the session's own tool call:
   the host's notice that a background command ended, which names a shell
   that a shell call of this same session reported as running, once for each
@@ -363,7 +370,10 @@ settings, backups and failure records. Never upload `.local/`.
   follow-up that fails or gives no usable answer never replaces the answer it
   followed.
 - Transient execution failures retry once in a new session; overflow splits the
-  shard. Permanent failures and cancellations are not retried.
+  shard, and so does a turn that reached the model's output limit where the
+  session has no usable answer. A stage of either class is not tried again in
+  a new session as it was, and permanent failures and cancellations are not
+  retried.
 - An interrupted stream that OpenCode recovered by itself costs no new session:
   a step it retried (OpenCode 2.3.0 and later) or a continuation it queued
   (earlier hosts). Accept an errored assistant message only with the host's retry mark
@@ -390,7 +400,10 @@ settings, backups and failure records. Never upload `.local/`.
   compact, and a compaction the host attempts in a reviewer's turn means "split
   this shard". A refused background summary (OpenCode's `compaction.background`, on
   by default from 2.3.1 on; `experimental.background_compaction` in earlier releases)
-  ends nothing, so the turn's own failure decides its class.
+  ends nothing, so the turn's own failure decides its class. An answer that
+  reached the model's output limit is not whole: nothing of that turn is
+  taken, and a shard of several files is split where the session has no
+  usable answer.
 - There is deliberately no default whole-run timeout and no per-stage step cap;
   see the roadmap's Deferred section before adding either.
 
@@ -1118,7 +1131,8 @@ terminal panel's source and fails when `src/tui.js` differs. For changes touchin
 publication, also run `node tests/host-v2-smoke.mjs <opencode binary>` (fresh and
 `--replace`), `node tests/host-v2-comment-scale.mjs <opencode binary>`,
 `node tests/host-v2-background-compaction.mjs <opencode binary>` and
-`node tests/host-v2-decline.mjs <opencode binary>`, the scale and the
+`node tests/host-v2-decline.mjs <opencode binary>` and
+`node tests/host-v2-output-limit.mjs <opencode binary>`, the scale and the
 background-compaction fixture also with `--cleanup`. The fixtures keep debug on to read its records, and
 debug keeps every private session: only the `--cleanup` runs, with debug off,
 exercise the deletion of a run's sessions on a real host.
@@ -1134,7 +1148,9 @@ the error type of a used-up limit, a prompt that is one of AZPR's commands,
 and the line length the native read returns; the decline fixture holds the
 form of a step that a person ended by declining a shell request without a
 message (the host's error on its message, no idle marker after it, and the
-execution the host starts when something woke the session meanwhile). When one of these steps fails
+execution the host starts when something woke the session meanwhile); the
+output-limit fixture holds the finish the host records on a step whose
+response reached the model's output limit. When one of these steps fails
 on another OpenCode, read that version's source before changing the step.
 Two kinds of fallback are behind them. Where the parts of a request cannot
 be told apart, or a message is not what the host builds of its own, the

@@ -18,7 +18,7 @@ acceptance runs, including the MCP-based runs, are preserved in
 ## Summary
 
 - **Every change, in CI.** `npm run check` and the offline test suite, then
-  fourteen runs on the real host of the tested OpenCode release (the README's
+  fifteen runs on the real host of the tested OpenCode release (the README's
   [Compatibility](../README.md#compatibility) row names it) with isolated profiles and
   fake model and Azure DevOps services: fresh, replacement and native
   installation (including an authenticating proxy, a custom CA certificate, a
@@ -27,7 +27,8 @@ acceptance runs, including the MCP-based runs, are preserved in
   publication, a refused background summary and a pass that fails while the
   other completes, the last two once more with debug off, where a run deletes
   its sessions when it ends, shell requests that a person declines with and
-  without a message, and, in the real terminal UI, the review panel, a
+  without a message, answers cut by the model's output limit, and, in the
+  real terminal UI, the review panel, a
   setup from a profile without settings and the confirmed update of settings
   of 0.4.x, each installed from source and as OpenCode's plugin manager
   installs the package.
@@ -91,6 +92,104 @@ The test-PR runs show that the workflow works and what it found on those PRs;
 the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
+
+## 0.5.4 release candidate acceptance (2026-11-28)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9 and tmux
+3.2a; OpenCode CLI 2.4.2, with isolated OpenCode profiles and the fake model
+and Azure DevOps services. 0.5.4 came as two pull requests: the list of
+findings (`bdbc60b`, merged as `2ec43be`) and the output limit with the
+release preparation (`9b641c1`). The host fixture runs below were made on each
+part's commit (the terminal UI runs of the first on `c8cdea6`, after which
+only documents and unit tests changed) and on the candidate with both merged
+(`cef1ee2`), with the same results; the controls ran on copies of 0.5.3
+(`f156ce0`) with the new fixture steps.
+
+0.5.4 changes two things. The terminal panel's list of findings answers to
+what is typed by a search of AZPR's own (`byWords`): an ID typed in full lists
+the finding of that ID alone, and no row where the list has none; anything
+else lists the rows whose title holds every word typed, compared in lower case
+with a Greek final sigma taken for a sigma, in the order they are listed. And a
+response of a turn that reached the model's output limit, which OpenCode
+records with the finish `length`, is the turn's own outcome: `requestReview`
+takes nothing of that turn and fails it as `output-limit`, unless a compaction
+attempted in the turn says the context was full, or a later response ended the
+turn otherwise (a person's interrupt, a provider's error), which decides as
+before. Where the session has no usable answer, the runtime splits a reviewer
+shard of several files, and a stage that fails as `output-limit` is not run
+again in a new session with the same input. No prompt changed (the hash test
+holds them), no setting is new, and the package has the files of 0.5.3.
+
+### Offline
+
+- `npm run check` passes, and `npm test` runs 839 tests (833 for 0.5.3), all
+  passing. New: the list's search (twelve findings, every ID in either case
+  and with spaces around it, the list in reverse order, a summary that names
+  another ID, IDs of 0.4.x reviews, an ID that is not offered, words in any
+  order and case, a Greek sigma whose lower case depends on where it stands in
+  a word, a German sharp s and a Turkish dotless i, `UTF-8`, a level and the
+  description beside a title, which are not searched, and the row that applies
+  the changes); a turn cut once and continued, cut until OpenCode gave up, cut
+  with someone else's message as well, cut in a tool call, cut and then ended
+  by a person's interrupt, a used-up limit, a refused key, a stream that broke
+  or a provider's filter, cut with a compaction attempted in it, a cut in the
+  turn before or after it and a cut whose turn before is gone, and OpenCode's
+  message without a cut; the order of the classification; the split of a shard
+  of several files, a shard of one file run once, and a correction and a
+  follow-up cut on a shard of two files, after which the answer before them
+  stands.
+- Targeted mutations: 14 of the list's search and 12 of the output limit's
+  rules, each taking one rule out of a copy or breaking it; each made a test
+  fail, and the tests passed again once it was restored.
+- No undeclared names in the changed files (a scan with the repository's
+  Babel), and the 406 local links and images of the documents resolve.
+
+### On the real host
+
+- **The host fixtures.** All 15 runs passed on OpenCode 2.4.2: the 14 of
+  0.5.3 and `host-v2-output-limit.mjs`. The three smoke runs made the requests
+  that 0.5.3 made on the same machine (fresh installation 123 model requests
+  and 212 Azure DevOps calls, replacement 102 and 182, native 129 and 228),
+  with the same result in every step apart from timings; the scale,
+  background-summary, decline, panel and setup runs passed with their usual
+  counts.
+- **The list of findings.** In OpenCode's terminal UI (`host-v2-tui-panel.mjs`,
+  installed from source and by OpenCode's plugin manager), typing `F-1` into
+  the list of findings listed that finding alone, with its level and without
+  a heading, although the words of F-3 hold a "1". The code of 0.5.3 with the
+  same fixture fails at that step: OpenCode's own search listed F-1 and F-3.
+- **An answer cut by the output limit.** `host-v2-output-limit.mjs` reviewed
+  one pull request of two files in one shard, one pass, twice. Where the
+  first answer was cut and OpenCode had the model go on, that session
+  recorded its cut response with the finish `length`, OpenCode's message, the
+  rest of the answer, which joined to the cut part makes a whole answer, and
+  a marker of success; AZPR took none of it, failed the turn as
+  `output-limit` (not for another message), split the shard, both halves
+  answered, and the review was COMPLETE. Where every answer was cut, OpenCode
+  gave up after two continuations in each session; the shard and each of its
+  halves failed once as `output-limit`, none was run again, and the review was
+  INCOMPLETE. The code of 0.5.3 with the same fixture fails at its first
+  review: both sessions of the shard failed as `transient` ("received another
+  message"), and where every answer was cut, the shard ran twice and was not
+  split.
+- **What OpenCode does.** Read from the source of OpenCode 2.3.0 and 2.4.2,
+  the same in both: a step whose response reached the model's output limit
+  keeps the finish `length` on its message; with nothing else pending,
+  OpenCode then writes a message of its own that asks the model to go on and
+  runs another step, and when the three latest user or assistant messages
+  all ended by the limit, it fails the step instead; where tool calls of the
+  step are pending, it goes on without that message. The plugin API passes a
+  list's own search to the select dialog, which shows what it returns, in
+  that order, without category headings, and shows a row's category in place
+  of its footer. Measured on 2.4.2: the forms the fixtures hold.
+
+### Not verified
+
+- Only OpenCode 2.4.2 ran; the source of 2.3.0 was read.
+- No review with a real model ran for this release: an answer of a real
+  model rarely reaches its output limit, and the list was measured in the
+  real terminal UI with the fake model.
+- A response cut in a tool call ran in the unit tests only.
 
 ## 0.5.3 after publication (2026-11-28)
 
@@ -6815,12 +6914,15 @@ transient failure, and its error names the last activity.
   session afterwards is authorized. A decline with a message (`opencode
   mini` asks for one) is the command's result instead: the model receives
   the message and goes on.
-- **An answer that reaches the model's output limit fails its pass.** OpenCode
-  then asks the model to go on, with a message of its own that AZPR takes for
-  someone else's: both sessions of the pass fail, and the receipt speaks of
-  another message in the turn, not of the limit (OpenCode 2.3.0 to 2.4.1,
-  measured with the fake model). Smaller shards (`workflow.shardFiles`) or a
-  model with a larger output limit avoid it.
+- **An answer that reaches the model's output limit is not taken.** Since
+  0.5.4, where an earlier answer of that session is usable, it stands. Where
+  none is, AZPR splits a reviewer shard of several files, and the halves run
+  instead; a shard of one file, a duplicate check, a rating or a planning
+  page fails then, without a new session, and degrades as any of its
+  failures does (the file stays unreviewed in that pass, findings are kept,
+  levels kept, a planning page failed). Fewer files per shard
+  (`workflow.shardFiles`) shorten a review's answers, and a model that allows
+  longer answers can help.
 - **A note that does not reach `claude-agent` models.** When a comment
   planning session has made twelve requests or read much, AZPR takes its
   tools away for the next request and adds a note to the request's system

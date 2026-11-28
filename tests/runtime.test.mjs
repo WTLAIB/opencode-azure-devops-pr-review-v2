@@ -260,6 +260,22 @@ async function fixture(t, opts = {}) {
               { id: `continue_${++seq}`, type: 'synthetic', text: 'The previous response was interrupted. Continue from where you left off without repeating completed content.' });
               result = result.$continued[1];
             }
+            // Like OpenCode 2.3.0 to the tested version: a response that reached the model's output limit ends its step
+            // with finish "length"; with nothing else pending the host asks the model to go on in a message of its own,
+            // and the next step answers, and after a third such step in a row it fails the step instead. `$length` is
+            // the cut texts, one for each step that reached the limit.
+            if (result?.$length) {
+              result.$length.forEach((text, index) => {
+                session.history.push({ id: `cut_${++seq}`, type: 'assistant', agent: role, model, finish: 'length', time: { created: 1, completed: 2 }, content: [{ type: 'text', text }] });
+                if (index < 2) session.history.push({ id: `limit_${++seq}`, type: 'synthetic', text: 'Your last response hit the output token limit (stop reason: length). Do not apologize, recap, or repeat yourself. Break the remaining work into smaller pieces.' });
+              });
+              if (result.$length.length > 2) {
+                session.history.push({ id: `idle_${++seq}`, type: 'idle', outcome: 'failed' });
+                session.outcome = 'failed';
+                return;
+              }
+              result = result.answer ?? defaultAnswer({ role, packet });
+            }
             if (result?.$provider) {
               session.history.push({ id: `answer_${++seq}`, type: 'assistant', agent: role, model, finish: 'error', time: { created: 1, completed: 2 },
                 error: { type: result.$providerType ?? 'provider.api', status: result.$provider, message: 'fixture' }, content: [] }, { id: `idle_${++seq}`, type: 'idle', outcome: 'failed' });
@@ -1020,6 +1036,59 @@ test('a compaction the host attempts marks context overflow and the shard is spl
   assert.deepEqual(saved.final.dispositions.map(row => [row.id, row.finding.location, row.shard, row.localId]),
     [['F-1', 'head:/a.ts:1', '1/1a pass 1', 'F-1'], ['F-2', 'head:/a.ts:1', '1/1 pass 2', 'F-1'], ['F-3', 'head:/b.ts:1', '1/1b pass 1', 'F-1']]);
   assert.deepEqual(saved.final.method.passes, [{ pass: 1, model: 'fixture/review-a', sessions: 2, failed: 0 }, { pass: 2, model: 'fixture/review-b', sessions: 1, failed: 0 }]);
+});
+
+test('a response that reaches the model\'s output limit fails its turn as output-limit, and the shard is split', async t => {
+  const f = await fixture(t, { files: ['/a.ts', '/b.ts'], answer({ role, packet, turn }) {
+    if (role === 'azpr-review-reviewer' && turn === 0 && packet.assignment.files.length > 1) return { $length: ['{"status":"COMPLETE","coverage":{"files":["/a.ts"'] };
+  } });
+  const receipt = await f.command();
+  // The halves are parts of the pass that was split: both passes reviewed both files.
+  assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete, 2\/2 file\(s\) in every pass; verification none\n/);
+  assert.deepEqual(f.sessionsFor('azpr-review-reviewer').map(s => s.packet.assignment.files.length), [2, 1, 1]);
+  assert.deepEqual(f.sessionsFor('azpr-review-reviewerb').map(s => s.packet.assignment.files.length), [2], 'The other pass is not split.');
+  assert.match(receipt, /\n- azpr-review-reviewer \[pass 1\/2\]: FAILED; [^\n]*failure=output-limit/);
+  assert.match(receipt, /\n- azpr-review-reviewer \[pass 1\/2 shard 1\/1a\]: COMPLETE; [^\n]*\n- azpr-review-reviewer \[pass 1\/2 shard 1\/1b\]: COMPLETE; /);
+  assert.doesNotMatch(receipt, /another message/);
+  assert.ok(f.notices.some(n => /PROGRESS — Review pass 1\/2 reached the model's output limit in its answer on 2 files; splitting the shard in two\./.test(n.text)));
+  const failed = (await stageRecords(receipt)).find(stage => stage.status === 'FAILED');
+  assert.deepEqual([failed.failureClass, failed.execution, /reached the model's output limit/.test(failed.error)], ['output-limit', undefined, true]);
+});
+
+test('a one-file shard whose answers keep reaching the output limit fails once, without a new session', async t => {
+  const f = await fixture(t, { files: ['/a.ts'], answer({ role }) {
+    if (role === 'azpr-review-reviewer') return { $length: ['{"st', '{"st', '{"st'] };
+  } });
+  const receipt = await f.command();
+  assert.equal(f.sessionsFor('azpr-review-reviewer').length, 1, 'Not tried again in a new session, and one file is not split.');
+  assert.match(receipt, /\n- azpr-review-reviewer \[pass 1\/2\]: FAILED; [^\n]*failure=output-limit/);
+  const failed = (await stageRecords(receipt)).find(stage => stage.status === 'FAILED');
+  assert.deepEqual([failed.execution.outputLimit, failed.execution.terminalOutcome, failed.execution.lastFinish], [true, 'failed', 'length']);
+  // The other pass reviewed the file.
+  assert.deepEqual(f.sessionsFor('azpr-review-reviewerb').length, 1);
+  assert.doesNotMatch(receipt, /another message/);
+});
+
+test('a correction or a follow-up that reaches the output limit leaves the answer before it standing, also on a shard of several files', async t => {
+  // One pass over two files: its first answer has a finding that passes and one without a location, and the
+  // correction turn is cut. The answer before it fit in the limit, so it stands: nothing is split or tried again.
+  const f = await fixture(t, { settings: quickSettings, files: ['/a.ts', '/b.ts'], answer(input) {
+    if (input.role !== 'azpr-quick-reviewer') return undefined;
+    if (input.turn) return { $length: ['{"status":"COMPLETE"'] };
+    const path = input.packet.assignment.files[0], { location: _missing, ...unplaced } = ownFinding(input, path, 'medium', 2);
+    return { ...defaultAnswer(input), findings: [ownFinding(input, path), { ...unplaced, summary: 'A defect without a place' }] };
+  } });
+  const receipt = await f.command('pr-quick');
+  assert.equal(f.sessionsFor('azpr-quick-reviewer').length, 1, 'Neither split nor tried again: the answer before the cut turn is the review.');
+  assert.match(receipt, /\n- azpr-quick-reviewer: COMPLETE; [^\n]*repair=failed:output-limit\n/);
+  assert.deepEqual((await savedReview(f, reviewId(receipt))).final.dispositions.map(row => [row.id, row.status]), [['F-1', 'REPORTED'], ['F-2', 'NEEDS_INFO']]);
+  // A follow-up that is cut: the PARTIAL answer it followed stands.
+  const g = await fixture(t, { settings: quickSettings, files: ['/a.ts', '/b.ts'], answer: input => input.role !== 'azpr-quick-reviewer' ? undefined
+    : input.turn ? { $length: ['{"status":"COMPLETE"'] } : partialAnswer(input.packet, [ownFinding(input, input.packet.assignment.files[0])]) });
+  const partial = await g.command('pr-quick');
+  assert.equal(g.sessionsFor('azpr-quick-reviewer').length, 1, 'Neither split nor tried again after a cut follow-up.');
+  assert.match(partial, /\n- azpr-quick-reviewer: PARTIAL; [^\n]*follow-up=failed:output-limit\n/);
+  assert.deepEqual((await savedReview(g, reviewId(partial))).final.dispositions.map(row => [row.id, row.status]), [['F-1', 'REPORTED']]);
 });
 
 test('a refused background summary does not turn a later permanent failure into an overflow split', async t => {

@@ -71,7 +71,7 @@ the review duration.
    [company networks](docs/ENTERPRISE.md#company-networks) first):
 
    ```sh
-   opencode plugin add opencode-azure-devops-pr-review@0.5.3
+   opencode plugin add opencode-azure-devops-pr-review@0.5.4
    ```
 
 2. In OpenCode's terminal UI, type `/pr-setup`. Dialogs ask for your Azure
@@ -581,14 +581,14 @@ Azure DevOps REST API with the runtime's built-in `fetch`.
 Install the npm package with OpenCode's plugin manager:
 
 ```sh
-opencode plugin add opencode-azure-devops-pr-review@0.5.3
+opencode plugin add opencode-azure-devops-pr-review@0.5.4
 ```
 
 The same release is also a versioned Git package, which needs Git but not the
 npm registry:
 
 ```sh
-opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.5.3'
+opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.5.4'
 ```
 
 Add only one of them. OpenCode (2.3.0 and later) loads the plugin into a
@@ -603,7 +603,7 @@ To select another configuration file, use an absolute path in the host config:
 ```json
 {
   "plugins": [{
-    "package": "opencode-azure-devops-pr-review@0.5.3",
+    "package": "opencode-azure-devops-pr-review@0.5.4",
     "options": { "settingsFile": "/absolute/path/to/azpr/settings.json" }
   }]
 }
@@ -644,7 +644,7 @@ For an entry that `opencode plugin add` created, add the new version and,
 only when that succeeds, remove the previous one:
 
 ```sh
-opencode plugin add opencode-azure-devops-pr-review@0.5.3 &&
+opencode plugin add opencode-azure-devops-pr-review@0.5.4 &&
   opencode plugin remove opencode-azure-devops-pr-review@PREVIOUS_VERSION
 ```
 
@@ -679,7 +679,8 @@ show a single `azpr` row with the new version (from 0.3.1, `/pr-check` names
 it too); if it still shows the previous one, run `opencode service restart`.
 Exact versions stay pinned: `opencode plugin update` leaves them unchanged,
 and so do OpenCode's automatic plugin updates (2.4.0 and later).
-See the [0.5.3 release notes](docs/releases/v0.5.3.md) for a declined shell request that ends its turn, the
+See the [0.5.4 release notes](docs/releases/v0.5.4.md) for a finding's ID in the list of findings and an answer cut by the model's output limit, the
+[0.5.3 release notes](docs/releases/v0.5.3.md) for a declined shell request that ends its turn, the
 [0.5.2 release notes](docs/releases/v0.5.2.md) for the move to OpenCode 2.4.2, the
 [0.5.1 release notes](docs/releases/v0.5.1.md) for the move to OpenCode 2.4.1, the
 [0.5.0 release notes](docs/releases/v0.5.0.md) for review passes in place of roles, the
@@ -760,8 +761,8 @@ says so, and `/pr-setup` then updates it as above.
 <details>
 <summary>Source installation and replacement</summary>
 
-Download the [v0.5.3 source archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.5.3.tar.gz)
-and extract it, or check out tag `v0.5.3`. The installer needs POSIX `sh` and
+Download the [v0.5.4 source archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.5.4.tar.gz)
+and extract it, or check out tag `v0.5.4`. The installer needs POSIX `sh` and
 Python 3's standard library. From that source directory:
 
 ```sh
@@ -1606,6 +1607,8 @@ node tests/host-v2-smoke.mjs /absolute/path/to/opencode --replace
 node tests/host-v2-smoke.mjs /absolute/path/to/opencode --native
 node tests/host-v2-comment-scale.mjs /absolute/path/to/opencode
 node tests/host-v2-background-compaction.mjs /absolute/path/to/opencode
+node tests/host-v2-decline.mjs /absolute/path/to/opencode
+node tests/host-v2-output-limit.mjs /absolute/path/to/opencode
 node tests/host-v2-comment-scale.mjs /absolute/path/to/opencode --cleanup
 node tests/host-v2-background-compaction.mjs /absolute/path/to/opencode --cleanup
 node tests/host-v2-tui-panel.mjs /absolute/path/to/opencode
@@ -1632,8 +1635,8 @@ dependency and is not built on your machine.
 Uninstall without `--apply` previews; `--apply` archives only this package under
 `azpr-v2-backups` and leaves the private state directory for you to delete.
 For a native installation, remove the entry you added, for example
-`opencode plugin remove opencode-azure-devops-pr-review@0.5.3` or
-`opencode plugin remove 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.5.3'`;
+`opencode plugin remove opencode-azure-devops-pr-review@0.5.4` or
+`opencode plugin remove 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.5.4'`;
 the external settings, PAT file and private review state remain available.
 
 [Architecture](docs/ARCHITECTURE.md), [commenting](docs/COMMENTING.md),
@@ -1646,7 +1649,7 @@ or personal model selections.
 ## License and releases
 
 [MIT](LICENSE), copyright 2026 WTLAIB. See the [changelog](CHANGELOG.md) for the
-release scope, [v0.5.3](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.5.3)
+release scope, [v0.5.4](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.5.4)
 for downloads, the [npm package](https://www.npmjs.com/package/opencode-azure-devops-pr-review),
 the [demo page](docs/DEMO.md) for the recordings and the version each was made
 with, and [releasing](docs/RELEASING.md) for the release process.
