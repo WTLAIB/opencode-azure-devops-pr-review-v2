@@ -6815,12 +6815,13 @@ transient failure, and its error names the last activity.
   session afterwards is authorized. A decline with a message (`opencode
   mini` asks for one) is the command's result instead: the model receives
   the message and goes on.
-- **An answer that reaches the model's output limit fails its pass.** OpenCode
-  then asks the model to go on, with a message of its own that AZPR takes for
-  someone else's: both sessions of the pass fail, and the receipt speaks of
-  another message in the turn, not of the limit (OpenCode 2.3.0 to 2.4.1,
-  measured with the fake model). Smaller shards (`workflow.shardFiles`) or a
-  model with a larger output limit avoid it.
+- **An answer that reaches the model's output limit is not taken.** Since
+  0.5.4, AZPR splits a reviewer shard of several files whose first answer was
+  cut, and the halves run instead. A shard of one file, a duplicate check, a
+  rating or a planning page whose answer is cut fails without a new session,
+  and that failure degrades as any of its failures does (the file stays
+  unreviewed in that pass, findings are kept, levels kept, a planning page
+  failed). A model with a larger output limit avoids it.
 - **A note that does not reach `claude-agent` models.** When a comment
   planning session has made twelve requests or read much, AZPR takes its
   tools away for the next request and adds a note to the request's system

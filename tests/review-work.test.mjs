@@ -225,6 +225,24 @@ test('a shard that overflows its context is split in half, and both halves stay 
   await assert.rejects(runReview(one.ctx, one.run, one.request), /Every review session failed: compaction refused/);
 });
 
+test('a shard whose answer reaches the model\'s output limit is split in half as well; one file is not split', async t => {
+  const files = ['/a.ts', '/b.ts', '/c.ts', '/d.ts'];
+  const limit = () => Object.assign(new Error('A response of this turn reached the model\'s output limit (finish=length).'), { failureClass: 'output-limit' });
+  const f = await context(t, { files, workflow: { shardFiles: 4 }, models: { reviewers: ['p/a', 'p/b'], rater: false }, behave: async ({ role, payload, pass, read }) => {
+    if (role === 'azpr-review-reviewer' && payload.assignment.files.length > 2) throw limit();
+    for (const path of payload.assignment.files) read(path);
+    return answer(payload, [finding('F-1', `head:${payload.assignment.files.at(-1)}:1`, `Pass ${pass + 1} ${payload.assignment.shard}`)]);
+  } });
+  const final = await runReview(f.ctx, f.run, f.request);
+  assert.deepEqual(f.calls.filter(call => call.role === 'azpr-review-reviewer').map(call => [call.label, call.payload.assignment.files.length]),
+    [['pass 1/2', 4], ['pass 1/2 shard 1/1a', 2], ['pass 1/2 shard 1/1b', 2]]);
+  assert.deepEqual(final.coverage['azpr-review-reviewer'], { assigned: 4, covered: 4, failedFiles: [], gaps: [] });
+  assert.ok(f.notices.includes('Review pass 1/2 reached the model\'s output limit in its answer on 4 files; splitting the shard in two.'), JSON.stringify(f.notices));
+  const one = await context(t, { files: ['/a.ts'], behave: async () => { throw limit(); } });
+  await assert.rejects(runReview(one.ctx, one.run, one.request), /Every review session failed: A response of this turn reached the model's output limit/);
+  assert.equal(one.calls.filter(call => call.role === 'azpr-review-reviewer').length, 1, 'One file is not split.');
+});
+
 test('only a changed source commit makes a review STALE; a moved base is a warning', async t => {
   const behave = reviewer(() => [finding('F-1', 'head:/src/a.ts:1')]);
   const moved = await context(t, { files: ['/src/a.ts'], behave });

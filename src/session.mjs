@@ -1,6 +1,6 @@
 /** OpenCode V2 session transport. No provider, Azure or HTTP client. */
 import { isDeepStrictEqual } from 'node:util';
-import { FOREIGN_MESSAGE_TYPES, USED_UP_LIMITS, endsExecution, isHostContinuation, hostInstructions, recordOf, requireMethods } from './host.mjs';
+import { FOREIGN_MESSAGE_TYPES, OUTPUT_LIMIT_FINISH, USED_UP_LIMITS, endsExecution, isHostContinuation, hostInstructions, recordOf, requireMethods } from './host.mjs';
 
 const pendingAdmissions = new WeakMap();
 const textValue = value => typeof value === 'string' && value.length > 0;
@@ -248,6 +248,11 @@ function ownShellNotices(messages) {
  *   `compaction.background`, on by default from 2.3.1 on; before that
  *   `experimental.background_compaction`) is not evidence: the turn went on, so
  *   its own failure decides.
+ * - output-limit: a response of the failed turn reached the model's output limit
+ *   (`outputLimit`). The same input would reach it again, so it is not tried
+ *   again in a new session; a shard of several files is split, as for overflow.
+ *   A person's interrupt, a used-up provider limit and a provider failure that
+ *   ended the turn (an HTTP status) say more about the turn and come first.
  * - transient: interrupted streams, provider 408/409/425/429/5xx, missing idle,
  *   unexpected host messages.
  * - permanent: everything else (authentication, bad request, a used-up usage or
@@ -261,10 +266,14 @@ export function classifyFailure(error) {
   if (status === 413) return 'overflow';
   if ([408, 409, 425, 429].includes(status) || (status >= 500 && status <= 599)) return 'transient';
   if (status >= 400 && status < 500) return 'permanent';
+  if (error?.outputLimit || execution?.outputLimit) return 'output-limit';
   if (execution && ['failed', 'unknown', 'missing-idle'].includes(execution.terminalOutcome)) return 'transient';
   if (error?.contextChanged || error?.transient) return 'transient';
   return 'permanent';
 }
+
+/** Failures that splitting the work answers: a context that overflowed, or a response that reached the output limit. */
+export const splitsWork = failureClass => failureClass === 'overflow' || failureClass === 'output-limit';
 
 /**
  * Admit exactly one literal prompt, await idle, then read authoritative context.
@@ -286,7 +295,8 @@ export function classifyFailure(error) {
  * session ended (`ownShellNotices`). Anyone else's message fails the request, as before, wherever the model of
  * this turn was sent it: after the prompt, and between the turn before and the prompt (`since` is that turn's
  * prompt, and what stands before a session's first prompt counts too). A turn that did not succeed fails by its
- * own outcome first, which decides whether it is tried again.
+ * own outcome first, which decides whether it is tried again; a response of the turn that reached the model's output
+ * limit is its own outcome too (`outputLimit`).
  *
  * What follows the turn's idle marker is no part of it: a command that ended later woke the session, and what
  * the host did then neither changes the answer nor how the turn ended. `settled` is called once the host reports
@@ -360,6 +370,10 @@ export async function requestReview(context, { sessionID, text, role, model, met
   const assistants = turn.filter(message => message?.type === 'assistant');
   const final = assistants.at(-1);
   const answer = final && Array.isArray(final.content) ? normalizeAnswer(final, sessionID) : undefined;
+  // A response of the turn that reached the model's output limit is the turn's own outcome: its answer is not whole,
+  // whatever came after it, and the same input would reach the limit again.
+  const limited = assistants.some(message => message?.finish === OUTPUT_LIMIT_FINISH);
+  const limit = limited ? 'A response of this turn reached the model\'s output limit (finish=length). ' : '';
   // The turn's own end says how it ended: its marker, or the step the host interrupted. The session's outcome is the
   // one its latest marker recorded, which can be a later execution's, or an earlier one's where nothing ends the
   // turn yet.
@@ -377,14 +391,18 @@ export async function requestReview(context, { sessionID, text, role, model, met
     if (compaction) execution.compaction = ['running', 'completed', 'failed'].includes(compaction.status) ? compaction.status : 'unknown';
     const provider = !execution.interrupted && providerFailure(final, assistants);
     if (provider) execution.provider = provider;
+    if (limited) execution.outputLimit = true;
     const hint = provider?.exhausted
       ? ` ${USED_UP_LIMITS[provider.exhausted]} (${provider.exhausted}), so a new session would fail the same way and is not started. Choose another model in the settings or wait until the limit resets.`
       : [401, 403].includes(provider?.status) ? ' Check provider access and the role\'s tool permissions.' : '';
     const detail = provider
       ? `Model provider request failed (${provider.status ? `HTTP ${provider.status}; ` : ''}${provider.toolCallsObserved} tool calls observed).${hint} `
       : '';
-    throw responseError(`[AZPR] ${detail}Reviewer execution did not finish successfully (session=${execution.sessionOutcome}; terminal=${execution.terminalOutcome}; assistantResponses=${assistants.length}; finish=${finish}).`, answer, execution);
+    throw responseError(`[AZPR] ${limit}${detail}Reviewer execution did not finish successfully (session=${execution.sessionOutcome}; terminal=${execution.terminalOutcome}; assistantResponses=${assistants.length}; finish=${finish}).`, answer, execution);
   }
+  // A turn that reached the output limit fails for it, as one that did not succeed fails by its outcome: before the
+  // turn before is looked at, and before anyone else's messages.
+  if (limited) throw Object.assign(responseError(`[AZPR] ${limit}No output of the turn was accepted.`, answer), { outputLimit: true });
   if (lost) throw changed('[AZPR] The turn before this one is no longer where the session\'s messages had it; no output was accepted.');
   // Someone else's message ends it: before the prompt, in the turn or after it. A turn that did not succeed has
   // failed by its own outcome above.

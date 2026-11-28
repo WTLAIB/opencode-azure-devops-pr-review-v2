@@ -247,6 +247,15 @@ never whether a defect is real.
    full and publishes nothing; it is refused before anything is sent and that
    refusal ends nothing: the
    turn goes on, so a later failure is classified by its own cause.
+   A response that reaches the model's output limit is another reason to split:
+   OpenCode records that step's assistant message with the finish `length`
+   (`OUTPUT_LIMIT_FINISH` in `host.mjs`), and `requestReview` takes no output
+   of such a turn, whatever came after that response, and fails it as
+   `output-limit` (unless a person's interrupt, a used-up provider limit or a
+   provider failure that ended the turn says more). Where no earlier answer
+   of the session is usable, the runtime splits a shard of several files in
+   half as for an overflow; a shard of one file, and any other stage, fail
+   without a new session, since the same input would reach the limit again.
 4. **The runtime's checks** — `evaluateReview` accepts each answer by its form
    and source only, never by whether a defect is real:
    - the answer contract with a required `location`; a parsed answer is a
@@ -281,7 +290,10 @@ never whether a defect is real.
      or holds a usable finding, a duplicate check that returned its list of
      merges, a rating that rated a finding, a grouping or planning page that
      parsed. Cancellation keeps its handling, and so does an overflow where
-     the work can be split (a reviewer shard of several files).
+     the work can be split (a reviewer shard of several files). A correction
+     or follow-up that reaches the model's output limit leaves the latest
+     usable answer standing like any later turn that fails
+     (`repair=failed:output-limit`): the answer before it fit.
 5. **The review's finding IDs** — once every session has answered, the runtime
    sorts the findings by side (HEAD before BASE), path and lines, then by
    pass, shard, part of a split shard and place in the answer

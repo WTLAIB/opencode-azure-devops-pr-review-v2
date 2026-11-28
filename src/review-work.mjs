@@ -9,6 +9,7 @@
 import { ROLES, reviewerRoles, roleFor, stageModel, raterState } from './config.mjs';
 import { searchLimitation } from './attribution.mjs';
 import { evaluateInitial, evaluateDuplicates, evaluateRatings, duplicateRepairPrompt, ratingRepairPrompt, reviewRepairPrompt, reviewFollowUpPrompt, syntaxProblem, locationPath, FINDING_FIELDS } from './output.mjs';
+import { splitsWork } from './session.mjs';
 
 export { locationPath };
 const text = value => typeof value === 'string' && value.trim().length > 0;
@@ -84,9 +85,10 @@ function reviewRunner(ctx, run, request, { snapshot, modelSnapshot, handlerFor }
       return [{ task, result }];
     } catch (error) {
       if (!run.active) throw error;
-      if (error?.failureClass === 'overflow' && task.files.length > 1) {
+      if (splitsWork(error?.failureClass) && task.files.length > 1) {
         const middle = Math.ceil(task.files.length / 2);
-        progress(run, `${ROLES[task.role].label}${sessionLabel(task) ? ` ${sessionLabel(task)}` : ''} reached its context limit on ${task.files.length} files; splitting the shard in two.`);
+        const reached = error.failureClass === 'output-limit' ? 'reached the model\'s output limit in its answer' : 'reached its context limit';
+        progress(run, `${ROLES[task.role].label}${sessionLabel(task) ? ` ${sessionLabel(task)}` : ''} ${reached} on ${task.files.length} files; splitting the shard in two.`);
         const halves = [task.files.slice(0, middle), task.files.slice(middle)].map((files, half) => ({ ...task, files, part: `${task.part ?? ''}${half ? 'b' : 'a'}` }));
         return [...await reviewTask(halves[0]), ...await reviewTask(halves[1])];
       }

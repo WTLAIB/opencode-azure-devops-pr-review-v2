@@ -27,6 +27,11 @@ export const HOST_CONTINUATION_TEXT = 'The previous response was interrupted. Co
 // ends the step's execution (see `endsExecution`).
 export const HOST_DECLINE_TEXT = 'The user declined this tool call';
 
+// The finish OpenCode 2.3.0 to the tested version record on the assistant message of a step whose response reached
+// the model's output limit. AZPR goes by that record alone: what OpenCode writes into the session after such a step
+// is not looked at for it.
+export const OUTPUT_LIMIT_FINISH = 'length';
+
 // Context message types that mean someone other than the admitted prompt
 // changed the conversation. Unknown future types are tolerated.
 export const FOREIGN_MESSAGE_TYPES = Object.freeze(['user', 'synthetic', 'agent-switched', 'model-switched', 'location-switched', 'shell', 'skill']);

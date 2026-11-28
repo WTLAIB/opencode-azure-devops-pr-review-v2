@@ -63,7 +63,7 @@ hashes together with the validation notes. Add a focused regression test
 when fixing behavior, and update the relevant documentation when it changes.
 
 Changes to hooks, sessions, tools, Azure access or publication also need the
-first eight host fixture runs below. Changes to package entry points,
+first nine host fixture runs below. Changes to package entry points,
 first-run setup or the settings path need the `--native` smoke run; changes
 to the terminal panel, or to the text of notices and receipts, which the
 panel reads, the two `host-v2-tui-panel` runs; and changes to setup, the
@@ -81,6 +81,7 @@ node tests/host-v2-smoke.mjs "$AZPR_TEST_HOST" --native
 node tests/host-v2-comment-scale.mjs "$AZPR_TEST_HOST"
 node tests/host-v2-background-compaction.mjs "$AZPR_TEST_HOST"
 node tests/host-v2-decline.mjs "$AZPR_TEST_HOST"
+node tests/host-v2-output-limit.mjs "$AZPR_TEST_HOST"
 node tests/host-v2-comment-scale.mjs "$AZPR_TEST_HOST" --cleanup
 node tests/host-v2-background-compaction.mjs "$AZPR_TEST_HOST" --cleanup
 node tests/host-v2-tui-panel.mjs "$AZPR_TEST_HOST"

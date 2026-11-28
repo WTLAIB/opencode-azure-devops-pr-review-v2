@@ -943,7 +943,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
           // A turn after the first that fails leaves the latest usable answer before it standing: a follow-up is
           // optional, and a correction turn only repairs items, which stay degraded instead. A stopped run, and a
           // context that overflowed where the handler can split its work (a reviewer shard of several files), keep
-          // their rules.
+          // their rules. A response that reached the output limit is no such case: the answer before it fit.
           const failureClass = runSignal.aborted ? 'cancelled' : watch.error ? 'idle' : classifyFailure(error);
           const kept = turn > 0 && failureClass !== 'cancelled' && !(failureClass === 'overflow' && handler.splittable === true);
           if (!kept || !lastUsable) throw error;

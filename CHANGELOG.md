@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.5.4 — 2026-11-28
+
+Two fixes that the recheck for 0.5.1 found and left for the next version.
+The tested host stays OpenCode 2.4.2. The prompt files are those of 0.5.3, no
+setting is new, and settings and saved reviews are used as they are.
+
+- **Typing a finding's ID in the list of findings selects that finding.** In
+  the terminal panel's list of findings (**Adjust findings…**), OpenCode's
+  own search listed the best match first: among twelve findings, `F-1`
+  listed F-11 first, and Enter opened F-11. The list now answers by a search
+  of AZPR's own: an ID typed in full lists the finding of that ID alone, and
+  no row where the list has none; anything else lists the rows that hold
+  every word typed, in the order they are listed. The list is drawn without
+  its headings ("Findings", "Then"), and each row still shows its level.
+- **An answer that reaches the model's output limit is no longer taken for
+  another message.** After a response that reached the model's output
+  limit, OpenCode asks the model to go on, with a message of its own. AZPR
+  0.5.3 took that message for someone else's: it failed the turn, ran the
+  shard once more in a new session, which failed the same way, and its
+  receipt spoke of another message. Now a response of the turn that reached
+  the limit (`finish=length`) is the turn's own outcome: nothing of that turn
+  is taken, its stage fails as `output-limit` with an error that names the
+  limit, and a reviewer shard of several files whose first answer was cut is
+  split in two, as for a full context. A shard of one file, a duplicate
+  check, a rating or a planning page whose answer is cut fails without a new
+  session, since the same input would be cut again; a correction or
+  follow-up that is cut leaves the answer before it standing. A person's
+  interrupt, a used-up provider limit and a provider failure that ended the
+  turn are classified as before.
+- **A host fixture for answers cut by the output limit.**
+  `tests/host-v2-output-limit.mjs` runs two reviews on the real host with a
+  fake model: one whose cut answer OpenCode has the model continue, and one
+  where every answer is cut until OpenCode gives up. It holds the finish
+  OpenCode records on such a step, and CI runs it.
+
 ## 0.5.3 — 2026-11-28
 
 A turn of one of AZPR's sessions ends where the execution that took its

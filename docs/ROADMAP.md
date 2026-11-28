@@ -75,6 +75,13 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   with `shell: "ask"` or `"inherit"`, what OpenCode does in a session after a
   person declined its shell request without a message gets no model request
   and no tool, and a host fixture holds the forms of OpenCode this rests on.
+- **A finding's ID in the list of findings, and an answer cut by the output
+  limit (0.5.4).** Typing an ID into the terminal panel's list of findings
+  lists that finding alone, where OpenCode's search had listed F-11 first for
+  `F-1`. A response that reached the model's output limit fails its turn as
+  `output-limit` instead of as someone else's message: a reviewer shard of
+  several files whose first answer was cut is split, and nothing is run
+  again in a new session with the same input.
 - **Rows the host's read returns whole (0.5.1).** The pages of AZPR's
   private data hold rows short enough for OpenCode's native read, which cut
   every row after 2,000 characters, so a model that read a large value in
