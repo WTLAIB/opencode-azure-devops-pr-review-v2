@@ -18,7 +18,7 @@ acceptance runs, including the MCP-based runs, are preserved in
 ## Summary
 
 - **Every change, in CI.** `npm run check` and the offline test suite, then
-  thirteen runs on the real host of the tested OpenCode release (the README's
+  fourteen runs on the real host of the tested OpenCode release (the README's
   [Compatibility](../README.md#compatibility) row names it) with isolated profiles and
   fake model and Azure DevOps services: fresh, replacement and native
   installation (including an authenticating proxy, a custom CA certificate, a
@@ -26,7 +26,8 @@ acceptance runs, including the MCP-based runs, are preserved in
   in shards and two passes with a context-overflow split and idempotent
   publication, a refused background summary and a pass that fails while the
   other completes, the last two once more with debug off, where a run deletes
-  its sessions when it ends, and, in the real terminal UI, the review panel, a
+  its sessions when it ends, shell requests that a person declines with and
+  without a message, and, in the real terminal UI, the review panel, a
   setup from a profile without settings and the confirmed update of settings
   of 0.4.x, each installed from source and as OpenCode's plugin manager
   installs the package.
@@ -88,6 +89,91 @@ The test-PR runs show that the workflow works and what it found on those PRs;
 the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
+
+## 0.5.3 release candidate acceptance (2026-11-28)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9 and tmux
+3.2a; OpenCode CLI 2.4.2, with isolated OpenCode profiles and the fake model
+and Azure DevOps services. The runs below were made on the candidate's commit
+`84fa523`; the commit after it changes only documents.
+
+0.5.3 ends a turn where the execution that took its prompt ended, also at a
+step OpenCode ended by an interrupt: one whose message carries OpenCode's
+error "Step interrupted", or, where another error came first in that step,
+whose declined call carries OpenCode's decline. `turnState` and
+`requestReview` draw that line, and the stage line of such a turn says
+`terminal=interrupted`. No prompt changed (the hash test holds them), no
+setting is new, and the package has the files of 0.5.2.
+
+### Offline
+
+- `npm run check` passes, and `npm test` runs 833 tests (829 for 0.5.2), all
+  passing. New: what ends an execution (a marker, OpenCode's step
+  interruption, a declined call where another error came first) and what
+  does not (a step OpenCode tries again, a call it stopped, a refusal with
+  feedback, other forms); where a turn stands; how `requestReview` ends and
+  classifies a turn that a step ended (without a marker, with a marker of a
+  stop, a failure or an execution that had nothing to do after it, with a
+  notice and a later execution after it, with another error first) and that
+  such a step does not stand in for the marker of the turn before; the
+  runtime's hooks after such a step (a request where it is prepared and
+  where it is sent, a retry, a native tool, AZPR's tool called through
+  OpenCode and directly);
+  a correction turn that a decline ended, after which the first answer
+  stands.
+- Targeted mutations: 11, each taking one of the new rules out of a copy or
+  breaking it; each made a test fail, and the tests passed again once it was
+  restored.
+- No undeclared names in the changed files (a scan with the repository's
+  Babel), and the 404 local links and images of the documents resolve.
+
+### On the real host
+
+- **The host fixtures.** All 14 runs passed on OpenCode 2.4.2: the 13 of
+  0.5.2 and `host-v2-decline.mjs`. The three smoke runs made the requests
+  that 0.5.2 (`d53371d`) made on the same machine (fresh installation 123
+  model requests and 212 Azure DevOps calls, replacement 102 and 182, native
+  129 and 228), with the same result in every step apart from timings; the
+  scale, background-summary, panel and setup runs passed with their usual
+  counts.
+- **A declined shell request.** `host-v2-decline.mjs` declined a reviewer's
+  shell request through OpenCode's permission route in four reviews of one
+  pass each. Declined without a message, the step's message carried "Step
+  interrupted", no idle marker followed, and the pass FAILED as interrupted
+  (`failure=permanent`, `terminal=interrupted`) without another session.
+  After a background command had ended and its notice waited in the
+  session's inbox, the decline ended the step as before, OpenCode started
+  the next execution at once, and AZPR refused its request before anything
+  was sent (`refusedOutsideTurn` 1; two primary requests authorized, none
+  after the decline); the pass FAILED the same way. With a finish reason
+  that OpenCode does not know in the declined step, its message carried
+  that error (`provider.invalid-output`) and the declined call OpenCode's
+  decline, and the turn ended there all the same, with the same results.
+  Declined with a message, the model received the message as the command's
+  result, went on, and the review was COMPLETE. On 0.5.2 the fixture fails
+  at its first review (`terminal=missing-idle`); the probe it grew from
+  recorded there, after the background command, three authorized requests
+  in the declined session and a pass that a new session completed.
+- **Controls.** In a copy without the declined call as a sign, the review
+  with an unknown finish reason let OpenCode's next execution through and
+  completed after a retry in a new session; in a copy whose `turnState`
+  reads markers only, the review after the background command did. Each
+  fails the fixture.
+- **What OpenCode does.** Read from the source of OpenCode 2.3.0 to 2.4.2,
+  the same in each: a step's message keeps the first error the step was
+  failed with, and the only one of type `aborted` is "Step interrupted"; a
+  decline without a message ends its step by an interrupt that OpenCode
+  records as a shutdown, which leaves no marker; its text is written only
+  while the session's location is open. Measured on 2.4.2: the forms the
+  fixture holds.
+
+### Not verified
+
+- Only OpenCode 2.4.2 ran; the source of 2.3.0 to 2.4.1 was read.
+- A content filter that ends a step after a tool call was read from the
+  source only: OpenAI-compatible responses drop unfinished tool calls then,
+  and the fake model speaks that protocol.
+- A location that closes while a request waits for approval did not run.
 
 ## 0.5.2 after publication (2026-11-27)
 
