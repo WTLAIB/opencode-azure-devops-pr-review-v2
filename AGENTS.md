@@ -167,18 +167,15 @@ settings, backups and failure records. Never upload `.local/`.
   by an interrupt. Such a step's message carries the host's error of type `aborted` (OpenCode 2.3.0
   to the tested version give no other assistant message that type), or,
   where another error came first in that step, the call a person declined
-  carries the host's decline (`HOST_DECLINE_TEXT`). Such a step ends its
-  execution, but where the session's location closed while a request waited
-  for approval: the host goes on with that execution once the location is
-  back, and that gets nothing either. A person's stop and a failure leave
-  their marker after such a step; for an end the host records
+  carries the host's decline (`HOST_DECLINE_TEXT`). A person's stop and a
+  failure leave their marker after such a step; for an end the host records
   as a shutdown it leaves none: its own, which ends the run with the
   process, and that of a step that a person ended by declining one of its
   tool calls without a message (shell `ask` or `inherit`), after which the
   host runs on and, where something woke the session meanwhile, starts
-  another execution at once. So the first such end after the prompt is the
-  end of the execution that had the prompt; a marker after an interrupted
-  step may be that later execution's and says nothing of the turn. The
+  another execution at once. What follows the first such end after the
+  prompt is no part of the turn, and a marker after an interrupted step may
+  be that later execution's and says nothing of the turn. The
   session's own outcome is the one its latest marker recorded, which can be
   a later execution's. Never skip an end: one before any answer is the
   turn's own end, not an earlier execution's. What follows it is no part of

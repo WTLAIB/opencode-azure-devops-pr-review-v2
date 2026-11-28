@@ -94,9 +94,11 @@ Findings still vary between models and runs; see
 
 Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9 and tmux
 3.2a; OpenCode CLI 2.4.2, with isolated OpenCode profiles and the fake model
-and Azure DevOps services. The runs below were made on the candidate's commit
-`4fdab18`; the commits before it, `84fa523` and `28a4e2d`, gave the same
-results, and the commits after it change only documents.
+and Azure DevOps services. The host fixture runs below were made on the
+candidate's commit `4fdab18`, and on `84fa523`, before the first review's
+corrections, with the same results; the two controls ran on copies of
+`84fa523`, and the unit tests and the targeted mutations on `4fdab18`. The
+commits after `4fdab18` change only documents.
 
 0.5.3 ends a turn where the execution that took its prompt ended, also at a
 step OpenCode ended by an interrupt: one whose message carries OpenCode's

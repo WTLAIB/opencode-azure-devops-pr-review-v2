@@ -1058,11 +1058,8 @@ execution, or a step the host ended by an interrupt. Such a step's message
 carries the host's error of type `aborted` ("Step interrupted"; the host
 gives no other assistant message that type), or, where another error came
 first in that step (a finish reason the host does not know, say), the call a
-person declined carries the host's decline. Such a step ends its execution,
-but where the session's location closed while a request waited for approval:
-the host goes on with that execution once the location is back, and that
-gets nothing either. So the first end after the prompt is the end of
-the execution that had the prompt, also where the model never answered (the
+person declined carries the host's decline. So the first such end after the
+prompt ends the turn, also where the model never answered (the
 turn was interrupted or failed), and what another execution wrote after it
 is not the turn's: a command that ended later woke the session, and neither
 what the host wrote then nor how that ended changes the answer. A marker
