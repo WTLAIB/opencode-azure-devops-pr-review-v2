@@ -156,8 +156,10 @@ settings, backups and failure records. Never upload `.local/`.
   output limit is its own outcome too: AZPR goes by the finish the host
   records on that assistant message (`OUTPUT_LIMIT_FINISH`), not by what the
   host writes into the session after it, and the turn fails as
-  `output-limit`, unless a person's interrupt, a used-up provider limit or a
-  provider failure that ended it says more. A message of the host passes only where it is
+  `output-limit`, unless a compaction attempted in the turn says its context
+  was full or a later response ended it otherwise (a person's interrupt, a
+  provider's error), which decides as before. A message of the host passes
+  only where it is
   one of those above, or the late result of the session's own tool call:
   the host's notice that a background command ended, which names a shell
   that a shell call of this same session reported as running, once for each
@@ -368,10 +370,10 @@ settings, backups and failure records. Never upload `.local/`.
   follow-up that fails or gives no usable answer never replaces the answer it
   followed.
 - Transient execution failures retry once in a new session; overflow splits the
-  shard, and so does a first answer that reached the model's output limit
-  (where no earlier answer of the session is usable). Neither is tried again
-  in a new session as it was, and permanent failures and cancellations are
-  not retried.
+  shard, and so does a turn that reached the model's output limit where the
+  session has no usable answer. A stage of either class is not tried again in
+  a new session as it was, and permanent failures and cancellations are not
+  retried.
 - An interrupted stream that OpenCode recovered by itself costs no new session:
   a step it retried (OpenCode 2.3.0 and later) or a continuation it queued
   (earlier hosts). Accept an errored assistant message only with the host's retry mark
@@ -400,7 +402,8 @@ settings, backups and failure records. Never upload `.local/`.
   by default from 2.3.1 on; `experimental.background_compaction` in earlier releases)
   ends nothing, so the turn's own failure decides its class. An answer that
   reached the model's output limit is not whole: nothing of that turn is
-  taken, and a shard of several files whose first turn reached it is split.
+  taken, and a shard of several files is split where the session has no
+  usable answer.
 - There is deliberately no default whole-run timeout and no per-stage step cap;
   see the roadmap's Deferred section before adding either.
 

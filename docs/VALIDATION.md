@@ -18,7 +18,7 @@ acceptance runs, including the MCP-based runs, are preserved in
 ## Summary
 
 - **Every change, in CI.** `npm run check` and the offline test suite, then
-  fourteen runs on the real host of the tested OpenCode release (the README's
+  fifteen runs on the real host of the tested OpenCode release (the README's
   [Compatibility](../README.md#compatibility) row names it) with isolated profiles and
   fake model and Azure DevOps services: fresh, replacement and native
   installation (including an authenticating proxy, a custom CA certificate, a
@@ -27,7 +27,8 @@ acceptance runs, including the MCP-based runs, are preserved in
   publication, a refused background summary and a pass that fails while the
   other completes, the last two once more with debug off, where a run deletes
   its sessions when it ends, shell requests that a person declines with and
-  without a message, and, in the real terminal UI, the review panel, a
+  without a message, answers cut by the model's output limit, and, in the
+  real terminal UI, the review panel, a
   setup from a profile without settings and the confirmed update of settings
   of 0.4.x, each installed from source and as OpenCode's plugin manager
   installs the package.
@@ -6816,12 +6817,14 @@ transient failure, and its error names the last activity.
   mini` asks for one) is the command's result instead: the model receives
   the message and goes on.
 - **An answer that reaches the model's output limit is not taken.** Since
-  0.5.4, AZPR splits a reviewer shard of several files whose first answer was
-  cut, and the halves run instead. A shard of one file, a duplicate check, a
-  rating or a planning page whose answer is cut fails without a new session,
-  and that failure degrades as any of its failures does (the file stays
-  unreviewed in that pass, findings are kept, levels kept, a planning page
-  failed). A model with a larger output limit avoids it.
+  0.5.4, where an earlier answer of that session is usable, it stands. Where
+  none is, AZPR splits a reviewer shard of several files, and the halves run
+  instead; a shard of one file, a duplicate check, a rating or a planning
+  page fails then, without a new session, and degrades as any of its
+  failures does (the file stays unreviewed in that pass, findings are kept,
+  levels kept, a planning page failed). Fewer files per shard
+  (`workflow.shardFiles`) shorten a review's answers, and a model that allows
+  longer answers can help.
 - **A note that does not reach `claude-agent` models.** When a comment
   planning session has made twelve requests or read much, AZPR takes its
   tools away for the next request and adds a note to the request's system

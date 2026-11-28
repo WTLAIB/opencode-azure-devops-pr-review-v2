@@ -251,11 +251,13 @@ never whether a defect is real.
    OpenCode records that step's assistant message with the finish `length`
    (`OUTPUT_LIMIT_FINISH` in `host.mjs`), and `requestReview` takes no output
    of such a turn, whatever came after that response, and fails it as
-   `output-limit` (unless a person's interrupt, a used-up provider limit or a
-   provider failure that ended the turn says more). Where no earlier answer
-   of the session is usable, the runtime splits a shard of several files in
-   half as for an overflow; a shard of one file, and any other stage, fail
-   without a new session, since the same input would reach the limit again.
+   `output-limit`, unless a compaction attempted in the turn says the context
+   was full or a later response ended the turn otherwise (a person's
+   interrupt, a provider's error), which decides as before. Where no earlier
+   answer of the session is usable, the runtime splits a shard of several
+   files in half as for an overflow; a stage that fails as `output-limit` is
+   not run again in a new session, since the same input is likely to reach
+   the limit again, so a shard of one file, and any other stage, fail then.
 4. **The runtime's checks** — `evaluateReview` accepts each answer by its form
    and source only, never by whether a defect is real:
    - the answer contract with a required `location`; a parsed answer is a

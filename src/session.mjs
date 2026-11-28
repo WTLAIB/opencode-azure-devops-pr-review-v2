@@ -249,10 +249,11 @@ function ownShellNotices(messages) {
  *   `experimental.background_compaction`) is not evidence: the turn went on, so
  *   its own failure decides.
  * - output-limit: a response of the failed turn reached the model's output limit
- *   (`outputLimit`). The same input would reach it again, so it is not tried
- *   again in a new session; a shard of several files is split, as for overflow.
- *   A person's interrupt, a used-up provider limit and a provider failure that
- *   ended the turn (an HTTP status) say more about the turn and come first.
+ *   (`outputLimit`), and nothing else ended the turn after it (`requestReview`).
+ *   The same input is likely to reach it again, so it is not tried again in a
+ *   new session; a shard of several files is split, as for overflow. A
+ *   compaction attempted in the turn, a person's interrupt, a used-up provider
+ *   limit and an HTTP status say more about the turn and come first.
  * - transient: interrupted streams, provider 408/409/425/429/5xx, missing idle,
  *   unexpected host messages.
  * - permanent: everything else (authentication, bad request, a used-up usage or
@@ -371,9 +372,11 @@ export async function requestReview(context, { sessionID, text, role, model, met
   const final = assistants.at(-1);
   const answer = final && Array.isArray(final.content) ? normalizeAnswer(final, sessionID) : undefined;
   // A response of the turn that reached the model's output limit is the turn's own outcome: its answer is not whole,
-  // whatever came after it, and the same input would reach the limit again.
+  // whatever came after it, and the same input is likely to reach the limit again. In a turn that did not succeed,
+  // that holds where its last response is such a one; where a later response ended it otherwise (a provider's error,
+  // a broken stream, a filter), that ending says how the turn ended, as before.
   const limited = assistants.some(message => message?.finish === OUTPUT_LIMIT_FINISH);
-  const limit = limited ? 'A response of this turn reached the model\'s output limit (finish=length). ' : '';
+  const limit = 'A response of this turn reached the model\'s output limit (finish=length). ';
   // The turn's own end says how it ended: its marker, or the step the host interrupted. The session's outcome is the
   // one its latest marker recorded, which can be a later execution's, or an earlier one's where nothing ends the
   // turn yet.
@@ -391,18 +394,24 @@ export async function requestReview(context, { sessionID, text, role, model, met
     if (compaction) execution.compaction = ['running', 'completed', 'failed'].includes(compaction.status) ? compaction.status : 'unknown';
     const provider = !execution.interrupted && providerFailure(final, assistants);
     if (provider) execution.provider = provider;
-    if (limited) execution.outputLimit = true;
+    const cutLast = final?.finish === OUTPUT_LIMIT_FINISH;
+    if (cutLast) execution.outputLimit = true;
     const hint = provider?.exhausted
       ? ` ${USED_UP_LIMITS[provider.exhausted]} (${provider.exhausted}), so a new session would fail the same way and is not started. Choose another model in the settings or wait until the limit resets.`
       : [401, 403].includes(provider?.status) ? ' Check provider access and the role\'s tool permissions.' : '';
     const detail = provider
       ? `Model provider request failed (${provider.status ? `HTTP ${provider.status}; ` : ''}${provider.toolCallsObserved} tool calls observed).${hint} `
       : '';
-    throw responseError(`[AZPR] ${limit}${detail}Reviewer execution did not finish successfully (session=${execution.sessionOutcome}; terminal=${execution.terminalOutcome}; assistantResponses=${assistants.length}; finish=${finish}).`, answer, execution);
+    throw responseError(`[AZPR] ${cutLast ? limit : ''}${detail}Reviewer execution did not finish successfully (session=${execution.sessionOutcome}; terminal=${execution.terminalOutcome}; assistantResponses=${assistants.length}; finish=${finish}).`, answer, execution);
   }
   // A turn that reached the output limit fails for it, as one that did not succeed fails by its outcome: before the
-  // turn before is looked at, and before anyone else's messages.
-  if (limited) throw Object.assign(responseError(`[AZPR] ${limit}No output of the turn was accepted.`, answer), { outputLimit: true });
+  // turn before is looked at, and before anyone else's messages. A compaction attempted in the turn says the context
+  // was full, as it does where the turn failed (`classifyFailure`).
+  if (limited) {
+    const compaction = turn.filter(message => message?.type === 'compaction').at(-1);
+    throw Object.assign(responseError(`[AZPR] ${limit}No output of the turn was accepted.`, answer), { outputLimit: true,
+      ...(compaction ? { execution: { compaction: ['running', 'completed', 'failed'].includes(compaction.status) ? compaction.status : 'unknown', outputLimit: true } } : {}) });
+  }
   if (lost) throw changed('[AZPR] The turn before this one is no longer where the session\'s messages had it; no output was accepted.');
   // Someone else's message ends it: before the prompt, in the turn or after it. A turn that did not succeed has
   // failed by its own outcome above.

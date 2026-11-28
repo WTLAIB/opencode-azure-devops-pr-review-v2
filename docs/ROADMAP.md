@@ -79,9 +79,9 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   limit (0.5.4).** Typing an ID into the terminal panel's list of findings
   lists that finding alone, where OpenCode's search had listed F-11 first for
   `F-1`. A response that reached the model's output limit fails its turn as
-  `output-limit` instead of as someone else's message: a reviewer shard of
-  several files whose first answer was cut is split, and nothing is run
-  again in a new session with the same input.
+  `output-limit` instead of as someone else's message: where the session has
+  no usable answer, a reviewer shard of several files is split, and a stage
+  that fails as `output-limit` is not run again with the same input.
 - **Rows the host's read returns whole (0.5.1).** The pages of AZPR's
   private data hold rows short enough for OpenCode's native read, which cut
   every row after 2,000 characters, so a model that read a large value in

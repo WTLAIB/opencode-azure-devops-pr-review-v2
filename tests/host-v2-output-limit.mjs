@@ -48,18 +48,20 @@ const provider = createServer(async (request, response) => {
     const assigned = payload?.assignment?.files ?? [];
     const entry = { scenario: scenario ?? null, reviewer: Boolean(payload?.assignment), files: assigned.length, continued };
     let final, finish = 'stop';
+    // A cut answer and the rest of it, which together are a whole answer: what joins them is not what AZPR goes by.
+    const cut = `{"status":"COMPLETE","coverage":{"files":${JSON.stringify(assigned).slice(0, -1)}`;
+    const rest = `],"gaps":[]},"findings":[],"report":"Reviewed (${scenario}, continued)."}`;
     if (payload?.assignment?.files && scenario) {
-      // A shard of two files is cut first in both scenarios; in "exhausted" every answer is.
-      if (scenario === 'exhausted' || (assigned.length > 1 && !continued)) {
-        final = `{"status":"COMPLETE","coverage":{"files":${JSON.stringify(assigned).slice(0, -1)}`;
-        finish = 'length';
-      } else {
-        final = { status: 'COMPLETE', coverage: { files: assigned, gaps: [] }, findings: [], report: `Reviewed (${scenario}${continued ? ', continued' : ''}).` };
-      }
+      // A shard of two files is cut first in both scenarios; in "exhausted" every answer is. In "split" the model then
+      // goes on where it was cut.
+      if (scenario === 'exhausted' || (assigned.length > 1 && !continued)) { final = cut; finish = 'length'; }
+      else if (assigned.length > 1) final = rest;
+      else final = { status: 'COMPLETE', coverage: { files: assigned, gaps: [] }, findings: [], report: `Reviewed (${scenario}).` };
     } else {
       final = 'Fixture summary.';
     }
     entry.finish = finish;
+    entry.text = typeof final === 'string' ? final : JSON.stringify(final);
     requests.push(entry);
     response.writeHead(200, { 'content-type': 'text/event-stream' });
     const emit = value => response.write('data: ' + JSON.stringify(value) + '\n\n');
@@ -111,7 +113,10 @@ try {
     outcomes[scenario] = { receipt, result, reviewers, messages };
   }
   const host = /v(\d+\.\d+\.\d+)/.exec(spawnSync(binary, ['--version'], { encoding: 'utf8', env }).stdout)?.[1] ?? 'unknown';
-  const shapes = messages => messages.map(message => message.type === 'assistant' ? `assistant:${message.finish}${message.error ? `/${message.error.type}` : ''}` : message.type === 'idle' ? `idle:${message.outcome}` : message.type);
+  // What OpenCode writes of instructions into a session by itself (an update of its date instruction after midnight,
+  // say) is no step of a turn: the shapes leave it out.
+  const steps = messages => messages.filter(message => message.type !== 'system');
+  const shapes = messages => steps(messages).map(message => message.type === 'assistant' ? `assistant:${message.finish}${message.error ? `/${message.error.type}` : ''}` : message.type === 'idle' ? `idle:${message.outcome}` : message.type);
   const of = scenario => requests.filter(entry => entry.scenario === scenario);
 
   // split: the cut turn of the shard of two files fails as output-limit; its halves answer, and the review is COMPLETE.
@@ -127,8 +132,10 @@ try {
   const cutShapes = shapes(split.messages[cutStage.sessionID]);
   assert.deepEqual(cutShapes, ['user', 'assistant:length', 'synthetic', 'assistant:stop', 'idle:succeeded'],
     'OpenCode recorded the cut step with finish "length", asked the model to go on, and the turn succeeded.');
-  assert.match(String(split.messages[cutStage.sessionID][2].text ?? ''), /output token limit/, 'OpenCode\'s own message asks the model to go on.');
+  assert.match(String(steps(split.messages[cutStage.sessionID])[2].text ?? ''), /output token limit/, 'OpenCode\'s own message asks the model to go on.');
   assert.deepEqual(of('split').map(entry => [entry.files, entry.continued, entry.finish]), [[2, false, 'length'], [2, true, 'stop'], [1, false, 'stop'], [1, false, 'stop']]);
+  const [first, second] = of('split');
+  assert.deepEqual(JSON.parse(first.text + second.text).coverage.files, files, 'The cut answer and its rest join into a whole answer, which AZPR still did not take.');
 
   // exhausted: OpenCode gives up after two continuations; the shard of two files is split, and each half of one
   // file fails once, not split and not tried in a new session.

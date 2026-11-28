@@ -707,20 +707,34 @@ test('a response that reached the model\'s output limit fails its turn as output
   // A step cut in a tool call goes on without OpenCode's message; the turn reached the limit all the same.
   const inCall = await run([prompt, cut('msg_tool', { content: [{ type: 'tool', id: 'tool_0', name: 'azpr_read_file', state: { status: 'error', error: { type: 'unknown', message: 'cut' } } }] }), assistant(), idle()]);
   assert.equal(classifyFailure(inCall), 'output-limit');
-  // A person's interrupt comes first, and so does a used-up provider limit.
+  // Where a later response ended the turn otherwise, that ending decides, as before: a person's interrupt, a used-up
+  // provider limit, a refused key (none of them split over new sessions), a stream that broke after its HTTP 200, a
+  // provider's filter (both tried once more in a new session).
+  const ended = (error, finish = 'error') => run([prompt, cut('msg_cut'), notice('msg_limit'), assistant({ finish, error }), { ...idle(), outcome: 'failed' }], { outcome: 'failed' });
   const stopped = await run([prompt, cut('msg_cut'), notice('msg_limit'), assistant({ finish: 'error', error: { type: 'aborted', message: 'Step interrupted' } })], { outcome: 'interrupted' });
-  assert.deepEqual([stopped.execution.interrupted, stopped.execution.outputLimit, classifyFailure(stopped)], [true, true, 'permanent']);
-  const usedUp = await run([prompt, cut('msg_cut'), notice('msg_limit'), assistant({ finish: 'error', error: { type: 'provider.quota', message: 'quota' } }), { ...idle(), outcome: 'failed' }], { outcome: 'failed' });
-  assert.equal(classifyFailure(usedUp), 'permanent');
-  assert.match(usedUp.message, /reached the model's output limit[^\n]*The provider reports the usage quota as used up/);
-  // A provider failure that ended the turn says more about it: a refused key is not split over new sessions.
-  const refused = await run([prompt, cut('msg_cut'), notice('msg_limit'), assistant({ finish: 'error', error: { type: 'provider.auth', status: 401, message: 'expired' } }), { ...idle(), outcome: 'failed' }], { outcome: 'failed' });
-  assert.deepEqual([refused.execution.outputLimit, refused.execution.provider.status, classifyFailure(refused)], [true, 401, 'permanent']);
+  assert.deepEqual([stopped.execution.interrupted, stopped.execution.outputLimit, classifyFailure(stopped)], [true, undefined, 'permanent']);
+  const usedUp = await ended({ type: 'provider.quota', message: 'quota' });
+  assert.deepEqual([usedUp.execution.outputLimit, classifyFailure(usedUp)], [undefined, 'permanent']);
+  assert.match(usedUp.message, /The provider reports the usage quota as used up/);
+  const refused = await ended({ type: 'provider.auth', status: 401, message: 'expired' });
+  assert.deepEqual([refused.execution.outputLimit, refused.execution.provider.status, classifyFailure(refused)], [undefined, 401, 'permanent']);
+  const broken = await ended({ type: 'provider.transport', status: 200, message: 'stream broke' });
+  assert.deepEqual([broken.execution.outputLimit, classifyFailure(broken)], [undefined, 'transient']);
+  assert.doesNotMatch(broken.message, /output limit/);
+  const filtered = await ended({ type: 'provider.content-filter', message: 'blocked' }, 'content-filter');
+  assert.deepEqual([filtered.execution.outputLimit, classifyFailure(filtered)], [undefined, 'transient']);
   // Without such a response the turn is judged as before: that text alone is someone else's message.
   const alone = await run([prompt, notice('msg_limit'), assistant(), idle()]);
   assert.deepEqual([alone.outputLimit, alone.contextChanged, classifyFailure(alone)], [undefined, true, 'transient']);
   // Only this turn's responses count: one of the turn before (up to its marker), or one after this turn's marker
   // (a later execution), says nothing about it.
+  // A compaction attempted in a cut turn says the context was full, also where the turn's marker says it succeeded.
+  const compacted = await run([prompt, cut('msg_cut'), notice('msg_limit'), { id: 'cmp_1', type: 'compaction', status: 'failed' }, assistant(), idle()]);
+  assert.deepEqual([compacted.outputLimit, compacted.execution?.compaction, classifyFailure(compacted)], [true, 'failed', 'overflow']);
+  // A cut turn whose turn before is gone fails for the cut: its own outcome comes first.
+  const orphan = await requestReview(host({ context: async () => [prompt, cut('msg_cut'), notice('msg_limit'), assistant(), idle()] }).context, { sessionID, text: input, since: 'msg_gone' })
+    .then(() => assert.fail('accepted'), error => error);
+  assert.deepEqual([orphan.outputLimit, orphan.contextChanged, classifyFailure(orphan)], [true, undefined, 'output-limit']);
   const accepted = (messages, since) => requestReview(host({ context: async () => messages }).context, { sessionID, text: input, since });
   const before = [{ id: 'msg_old', type: 'user', text: 'the turn before' }, cut('msg_old_cut'), { ...idle(), id: 'msg_old_idle', outcome: 'failed' }];
   assert.equal((await accepted([...before, prompt, assistant(), idle()], 'msg_old')).parts[0].text, '{"status":"COMPLETE"}');
