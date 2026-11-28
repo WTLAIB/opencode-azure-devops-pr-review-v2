@@ -6868,8 +6868,9 @@ transient failure, and its error names the last activity.
   Two things are as they were on 2.3.0: a panel that fills a narrow terminal
   shows bands of the Markdown's background, and the second line of a
   question's row is cut at the dialog's width. (Until 0.5.4, what was typed
-  into the list that adjusts findings selected by the host's fuzzy search,
-  so with ten or more findings `F-1` selected `F-11`.)
+  into the list that adjusts findings went to the host's fuzzy search; in a
+  preview of twelve findings, `F-1` selected `F-11` on OpenCode 2.3.0 and
+  2.4.1.)
 - **A release the terminal UI makes up.** On OpenCode 2.4.0 and later a step,
   a session's row or `close` that was pressed and moved on, and whose release
   never arrived, gets a release at the next press anywhere. AZPR takes a

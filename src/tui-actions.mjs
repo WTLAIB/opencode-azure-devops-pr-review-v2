@@ -36,11 +36,12 @@ const byBeginning = (query, options) => {
   return typed ? options.filter(option => String(option.title).toLowerCase().startsWith(typed)) : [...options];
 };
 
-// A query that is a finding's ID as reviews write them (`F-12`; reviews of 0.4.x also `R-` and `Q-`), compared in
-// upper case. Upper case maps each letter the same way wherever it stands in a word; lower case gives a Greek sigma
-// at a word's end another form than within the word, so a word typed in full would miss the title that holds it.
-const ID_QUERY = /^[A-Z]+-\d+$/;
-const fold = text => String(text ?? '').toUpperCase();
+// A query that is a finding's ID as reviews write them (`F-12`; reviews of 0.4.x also `R-` and `Q-`): ASCII letters,
+// a hyphen and digits, as typed.
+const ID_QUERY = /^[A-Za-z]+-\d+$/;
+// Words are compared in lower case, with a Greek final sigma taken for a sigma: lower case gives a sigma at the end of
+// what was typed another form than within a word, so the start of a word would miss the title that holds it.
+const fold = text => String(text ?? '').toLowerCase().replace(/ς/g, 'σ');
 
 /**
  * How the list of findings answers to what is typed into its search line. An ID typed in full lists the finding
@@ -52,10 +53,10 @@ const fold = text => String(text ?? '').toUpperCase();
  * listed F-11 first, and Enter took it.
  */
 const byWords = (query, options) => {
-  const typed = fold(query).trim();
+  const typed = String(query ?? '').trim();
   if (!typed) return [...options];
-  if (ID_QUERY.test(typed)) return options.filter(option => fold(option.value) === typed);
-  const words = typed.split(/\s+/);
+  if (ID_QUERY.test(typed)) return options.filter(option => String(option.value).toUpperCase() === typed.toUpperCase());
+  const words = fold(typed).split(/\s+/);
   return options.filter(option => { const title = fold(option.title); return words.every(word => title.includes(word)); });
 };
 

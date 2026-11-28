@@ -650,8 +650,10 @@ try {
   // finding.
   assert.match(screen(), /F-3 — `refund` drops the guard/, 'The list does not show the finding in refund.ts.');
   type('F-1');
-  await see(shown => /F-1 — `invoice` drops the guard\b[^\n]* high\b/.test(shown) && !/F-\d+ — `(?!invoice`)/.test(shown),
-    'Typing the ID did not list that finding alone, with its level: the list was not searched by AZPR\'s own search.');
+  // One frame shows F-1 with its level, no other finding, and no heading above F-1: the host draws a list with a
+  // search of its own flat.
+  await see(shown => /F-1 — `invoice` drops the guard\b[^\n]* high\b/.test(shown) && !/F-\d+ — `(?!invoice`)/.test(shown) && !/Findings[^\n]*\n[^\n]*F-1 — /.test(shown),
+    'Typing the ID did not list that finding alone, with its level and without a heading: the list was not searched by AZPR\'s own search.');
   key('Enter');
   await see(/F-1: how is it published\?/, 'Picking a finding did not ask what happens to it.');
   // The level the review gave it is the rating's: its reviewer filed it as medium.

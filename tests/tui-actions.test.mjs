@@ -436,10 +436,13 @@ test('what is typed into the list of findings: an ID finds that finding alone, w
   assert.deepEqual(ids('nothing like this'), []);
   // Only titles are searched: not the level a row shows beside its title.
   assert.deepEqual(ids('medium'), []);
-  // Letters compare the same wherever they stand in a word: a Greek sigma typed at the end of what was typed still
-  // finds the title that holds it within a word, in either case.
-  const greek = await listed([{ id: 'F-1', severity: 'medium', summary: 'ΣΥΣΤΗΜΑ χωρίς έλεγχο' }, { id: 'F-2', severity: 'low', summary: 'other' }]);
-  for (const typed of ['ΣΥ', 'ΣΥΣ', 'συς', 'ΣΥΣΤ', 'σύστημα', 'ΧΩΡΊΣ']) assert.deepEqual(ids(typed, greek), typed === 'σύστημα' ? [] : ['F-1'], typed);
+  // Letters compare without regard to case wherever they stand in a word: a Greek sigma typed at the end of what was
+  // typed still finds the title that holds it within a word, in either case; a German sharp s in either case; and a
+  // word of letters, a hyphen and digits that are not all ASCII is no ID.
+  const words = await listed([{ id: 'F-1', severity: 'medium', summary: 'ΣΥΣΤΗΜΑ χωρίς έλεγχο' }, { id: 'F-2', severity: 'low', summary: 'Größe of a sınıf-1 buffer' }]);
+  for (const typed of ['ΣΥ', 'ΣΥΣ', 'συς', 'ΣΥΣΤ', 'σύστημα', 'ΧΩΡΊΣ', 'χωρίς', 'GRÖẞE', 'größe', 'sınıf-1']) {
+    assert.deepEqual(ids(typed, words), typed === 'σύστημα' ? [] : /[ΣΧσχ]/i.test(typed) ? ['F-1'] : ['F-2'], typed);
+  }
   // The step's key pressed once more than meant is typed into the list it opened, which has nothing to apply yet:
   // it lands on a finding, whose levels are asked next.
   assert.deepEqual(ids('a'), ['F-3', 'F-11']);
