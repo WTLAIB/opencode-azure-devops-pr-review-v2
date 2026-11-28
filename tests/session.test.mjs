@@ -246,6 +246,52 @@ test('a turn ends at the first idle marker after its prompt, whatever came befor
   assert.deepEqual((await requestReview(woken, { sessionID, text: input })).parts, [{ type: 'text', text: '{"answer":"given"}' }]);
 });
 
+test('a turn ends at a step the host interrupted or a person declined, whatever follows it, and fails as interrupted', async () => {
+  const prompt = { id: 'msg_input', type: 'user', text: input };
+  const declined = { type: 'tool', id: 'call_1', name: 'shell', state: { status: 'error', error: { type: 'aborted', message: 'The user declined this tool call' } } };
+  // Like OpenCode 2.3.0 to the tested version: a person declined one of the step's tool calls without a message.
+  const step = assistant({ id: 'msg_step', finish: 'error', error: { type: 'aborted', message: 'Step interrupted' }, content: [declined] });
+  // The same where an error came first in that step (a finish reason the host did not know): the step's message
+  // keeps that error, and the declined call says what ended the step.
+  const mixed = assistant({ id: 'msg_step', finish: 'error', error: { type: 'provider.invalid-output', message: 'unknown finish' }, content: [declined] });
+  const later = assistant({ id: 'msg_later', content: [{ type: 'text', text: '{"answer":"of another execution"}' }] });
+  const notice = { id: 'msg_notice', type: 'synthetic', text: '<background-result kind="shell" id="sh_1" state="completed">done</background-result>' };
+  const tools = assistant({ id: 'msg_tools', finish: 'tool-calls', content: [{ type: 'tool', id: 'call_0', name: 'shell', state: { status: 'completed' } }] });
+  for (const [name, messages] of [
+    // The host records the end of that execution as a shutdown and leaves no marker.
+    ['no marker', [prompt, step]], ['no marker after another error', [prompt, mixed]],
+    // Something woke the session meanwhile, and the host started another execution at once: what it wrote is not
+    // the turn's, also where it answered and succeeded, and so is the marker of one that had nothing to do.
+    ['another execution', [prompt, tools, step, notice, later, { ...idle(), id: 'msg_idle_later' }]],
+    ['another execution after another error', [prompt, tools, mixed, notice, { ...idle(), id: 'msg_idle_later', outcome: 'failed' }]],
+    ['an empty execution after it', [prompt, step, { ...idle(), id: 'msg_idle_later' }]],
+    // A marker right after the step, of a person's stop or a failure, does not change how the turn ended.
+    ['a stop', [prompt, step, { ...idle(), id: 'msg_end', outcome: 'interrupted' }]],
+    ['a failure', [prompt, step, { ...idle(), id: 'msg_end', outcome: 'failed' }, later, idle()]],
+  ]) {
+    const { context } = host({ context: async () => messages, get: async () => ({ id: sessionID, agent: 'azpr-review-functional', model, outcome: messages.at(-1).type === 'idle' ? messages.at(-1).outcome : undefined }) });
+    await assert.rejects(requestReview(context, { sessionID, text: input }), error => {
+      assert.match(error.message, /did not finish successfully \(session=[a-z]+; terminal=interrupted; assistantResponses=\d; finish=error\)/, name);
+      assert.deepEqual([error.execution.terminalOutcome, error.execution.interrupted, error.execution.provider, error.response.info.id], ['interrupted', true, undefined, 'msg_step'], name);
+      assert.equal(classifyFailure(error), 'permanent', name);
+      return true;
+    });
+  }
+  // The turn before a later one is a turn whose answer was taken, which ended with its marker: a step the host
+  // interrupted after it does not stand in for that marker.
+  const { context: next } = host({ context: async () => [{ id: 'msg_first', type: 'user', text: 'first' }, step, prompt, assistant(), idle()] });
+  await assert.rejects(requestReview(next, { sessionID, text: input, since: 'msg_first' }), /The turn before this one is no longer where the session's messages had it/);
+  // Where the turn before is no longer there (taken back, say), a turn that such a step ended fails by its own
+  // outcome first: as interrupted, not as a changed context that would be tried again.
+  for (const shape of [step, mixed]) {
+    const { context: gone } = host({ context: async () => [prompt, shape] });
+    await assert.rejects(requestReview(gone, { sessionID, text: input, since: 'msg_taken_back' }), error => {
+      assert.deepEqual([error.execution?.terminalOutcome, error.contextChanged, classifyFailure(error)], ['interrupted', undefined, 'permanent']);
+      return true;
+    });
+  }
+});
+
 test('the caller is told that the session is idle before its context is read', async () => {
   const order = [];
   const { context } = host({ wait: async () => { order.push('wait'); }, context: async () => { order.push('context'); return [{ id: 'msg_input', type: 'user', text: input }, assistant(), idle()]; },
@@ -276,7 +322,8 @@ test('failed and interrupted sessions expose terminal states without leaking pro
       context: async () => [{ id: 'msg_input', type: 'user', text: input }, final, { ...idle(), outcome }] });
     await assert.rejects(requestReview(context, { sessionID, text: input }), error => {
       assert.equal(error.execution.sessionOutcome, outcome);
-      assert.equal(error.execution.terminalOutcome, outcome);
+      // The turn ended at the step the host interrupted, whatever marker follows it.
+      assert.equal(error.execution.terminalOutcome, 'interrupted');
       assert.equal(error.execution.assistantResponses, 1);
       assert.equal(error.execution.lastFinish, 'error');
       assert.equal(error.execution.interrupted, true);

@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.5.3 — 2026-11-28
+
+A turn of one of AZPR's sessions ends where the execution that took its
+prompt ended, also at a step OpenCode ended by an interrupt. This removes a
+known limitation of 0.5.2: with `shell: "ask"` or `"inherit"`, a shell request
+that a person declined without a message left the turn open, and what OpenCode
+then did in the session by itself could get a model request and tools. The
+tested host stays OpenCode 2.4.2. The prompt files are those of 0.5.2, no
+setting is new, and settings and saved reviews are used as they are.
+
+- **A declined shell request ends its turn at the declined step.** Declined
+  without a message (OpenCode's full-screen terminal UI and its desktop app
+  give none in AZPR's sessions), OpenCode interrupts that step and records the
+  end of its execution as a shutdown, which leaves no marker of the turn's end.
+  AZPR 0.5.2 counted a turn to the first such marker, so where something woke
+  the session meanwhile (the notice of a background command that ended, say),
+  it let the model request and the tool calls of the execution that OpenCode
+  started then through, refused the turn afterwards and tried the pass again in
+  a new session. Now the declined step is the turn's end (`endsExecution` in
+  `host.mjs`): its message carries OpenCode's error "Step interrupted", or,
+  where another error came first in that step, the declined call carries
+  OpenCode's decline. Nothing OpenCode starts in that session afterwards gets
+  a model request, a retry or a tool, and the turn fails as interrupted
+  (`failure=permanent`) and is not tried in a new session. A reviewer's first
+  turn fails its pass, as it already did when nothing woke the session, and
+  after a correction or follow-up turn the latest usable answer stands, where
+  there is one, as for any turn that fails. Where the stage fails, its line
+  says `terminal=interrupted` (for a plain decline it said
+  `terminal=missing-idle`), also where a marker follows the step, which may be
+  a later execution's. A decline with a message still lets the session go on.
+- **A host fixture for declined requests.** `tests/host-v2-decline.mjs` runs
+  four reviews on the real host with a fake model (a request declined without
+  a message; one declined after a background command ended; the same where the
+  declined step also ended with a finish reason OpenCode does not know; one
+  declined with a message) and holds the forms of OpenCode that AZPR tells
+  such an end by. CI runs it.
+- **CONTRIBUTING names the fixture runs each kind of change needs.** It spoke
+  of "the last two" runs where six runs of the terminal UI follow.
+
 ## 0.5.2 — 2026-11-27
 
 AZPR is tested with OpenCode 2.4.2 instead of 2.4.1. OpenCode 2.4.2 was

@@ -232,6 +232,19 @@ async function fixture(t, opts = {}) {
             }
             let result = await opts.answer?.({ role, packet, turn, text: input.text, session }) ?? defaultAnswer({ role, packet });
             const model = clone(session.model);
+            // Like OpenCode 2.3.0 to the tested version: a person declined one of the step's tool calls without a
+            // message. The host gives the step its error and records the end of the execution as a shutdown, which
+            // leaves no marker. `declined` is what the host does in the session afterwards while the wait for it
+            // lasts (where something woke the session meanwhile, it starts another execution at once).
+            // `$declined.error` is an error that came first in that step (a finish reason the host did not know), which
+            // the step's message keeps instead of the host's own.
+            if (result?.$declined) {
+              session.history.push({ id: `answer_${++seq}`, type: 'assistant', agent: role, model, finish: 'error', time: { created: 1, completed: 2 },
+                error: result.$declined.error ?? { type: 'aborted', message: 'Step interrupted' },
+                content: [{ type: 'tool', id: `call_${++seq}`, name: 'shell', state: { status: 'error', error: { type: 'aborted', message: 'The user declined this tool call' } } }] });
+              await opts.declined?.({ session, role, turn, emit, invoke, model, next: () => `late_${++seq}` });
+              return;
+            }
             // Like OpenCode 2.3.0: a step whose stream broke stays as an errored message marked for retry, and the
             // retried step answers in a new assistant message.
             for (let cut = 0; cut < (result?.$retried ?? 0); cut++) {
@@ -5719,6 +5732,67 @@ test('input that reaches a session while it goes idle is part of its turn; what 
   assert.deepEqual([stage.status, stage.sessionReads, stage.modelRequests], ['COMPLETE', 2, 2]);
   assert.deepEqual([stage.requestObservations.turnChecks, stage.requestObservations.refusedOutsideTurn], [3, 2]);
   assert.deepEqual(stage.requestObservations.retries.at(-1), { attempt: 2, proposed: true, allowed: false });
+});
+
+test('a turn ends at a step the host interrupted or a person declined: what the host starts afterwards gets no request, no retry and no tool, and the pass fails as interrupted', async t => {
+  // The step's message carries the host's own error, or one that came first in that step (a finish reason the host
+  // did not know); either way the declined call says what ended the step.
+  for (const [name, declined] of [['interrupted', true], ['another error first', { error: { type: 'provider.invalid-output', message: 'unknown finish' } }]]) {
+    const azure = fakeAzure({ files: ['/src/Main.java'], sources: { '/src/Late.java': 'late\n' } });
+    const outcome = async run => { try { await run(); return 'ran'; } catch (error) { return error.message; } };
+    const seen = [];
+    let f;
+    f = await fixture(t, { azure, settings: quickSettings,
+      answer(input) { return input.role === 'azpr-quick-reviewer' ? { $declined: declined } : undefined; },
+      // The notice of a background command woke the session as the declined step ended: OpenCode starts another
+      // execution at once, no marker standing after the prompt. That execution is not the turn's.
+      async declined({ session, role, emit, invoke, next }) {
+        if (role !== 'azpr-quick-reviewer') return;
+        session.history.push({ id: next(), type: 'synthetic', text: '<background-result kind="shell" id="sh_1" state="completed">done</background-result>' });
+        const frame = { sessionID: session.id, agent: role, model: clone(session.model), system: [], messages: f.project(session.history), tools: {} };
+        seen.push(await outcome(() => emit('session', 'context', frame)));
+        seen.push(await outcome(() => emit('session', 'model.request', { sessionID: session.id, agent: role, model: clone(session.model), kind: 'primary' })));
+        const retry = await emit('session', 'retry', { sessionID: session.id, agent: role, model: clone(session.model), error: { type: 'provider.transport' }, attempt: 2, decision: { retry: true, delay: 5 } });
+        seen.push(retry.decision);
+        // A step of that execution asks for AZPR's tool and a native one; AZPR's tool is also called directly.
+        session.step = undefined;
+        seen.push(await outcome(() => invoke(session, 'azpr_read_file', { path: '/src/Late.java', version: 'head' })));
+        seen.push(await outcome(() => invoke(session, 'read', { filePath: 'notes.txt' })));
+        seen.push(await outcome(() => f.registry.tool('azpr_read_file').execute({ path: '/src/Late.java', version: 'head' }, { sessionID: session.id, agent: role })));
+        // Its request was refused, so that execution failed and left its marker.
+        session.history.push({ id: next(), type: 'idle', outcome: 'failed' });
+        session.outcome = 'failed';
+      } });
+    const receipt = await f.command('pr-quick');
+    assert.match(receipt, /^- azpr-quick-reviewer: FAILED; session=ses_[A-Za-z0-9_]+; model=[^;]+; failure=permanent; error=\[AZPR\] Reviewer execution did not finish successfully \(session=failed; terminal=interrupted; assistantResponses=\d; finish=\w+\)\.$/m, `${name}\n${receipt}`);
+    assert.equal([...receipt.matchAll(/^- azpr-quick-reviewer/gm)].length, 1, `${name}: a declined pass is not tried again.`);
+    assert.deepEqual(seen, ['[AZPR] No reviewer turn is open in this session; a request the host starts by itself is not authorized.', '[AZPR] Model request has no authorized primary context.',
+      { retry: false }, '[AZPR] Review tool authorization expired.', '[AZPR] Review tool authorization expired.', '[AZPR] AZPR tools are available only to an active AZPR reviewer session.'], name);
+    assert.equal(azure.callsTo('items').filter(call => JSON.stringify(call.query).includes('Late.java')).length, 0, `${name}: nothing was read after the declined step.`);
+    const [stage] = await stageRecords(receipt);
+    assert.deepEqual([stage.status, stage.failureClass, stage.execution.terminalOutcome, stage.execution.interrupted, stage.modelRequests, stage.requestObservations.refusedOutsideTurn],
+      ['FAILED', 'permanent', 'interrupted', true, 1, 1], name);
+  }
+});
+
+test('a correction turn that a person\'s decline ended leaves the answer before it standing', async t => {
+  // One pass over one file: its answer has one finding that passes and one without a location. In the correction
+  // turn a person declines a shell request without a message.
+  const f = await fixture(t, { settings: quickSettings, answer(input) {
+    if (input.role !== 'azpr-quick-reviewer') return undefined;
+    if (input.turn) return { $declined: true };
+    const path = input.packet.assignment.files[0], { location: _missing, ...unplaced } = ownFinding(input, path, 'medium', 2);
+    return { ...defaultAnswer(input), findings: [ownFinding(input, path), { ...unplaced, summary: 'A defect without a place' }] };
+  } });
+  const receipt = await f.command('pr-quick');
+  assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete; verification none\n/, receipt);
+  assert.match(receipt, /\n- azpr-quick-reviewer: COMPLETE; session=[^;\n]+; model=fixture\/quick-reviewer; repair-turns=1;[^\n]*repair=failed:permanent\n/, receipt);
+  assert.equal(f.sessionsFor('azpr-quick-reviewer').length, 1, 'No new session: the answer before the declined turn is the review.');
+  const saved = await savedReview(f, reviewId(receipt));
+  assert.deepEqual(saved.final.dispositions.map(row => [row.id, row.status]), [['F-1', 'REPORTED'], ['F-2', 'NEEDS_INFO']]);
+  const [stage] = await stageRecords(receipt);
+  assert.deepEqual([stage.repairFailure.turn, stage.repairFailure.failureClass], [1, 'permanent']);
+  assert.match(stage.repairFailure.error, /terminal=interrupted/);
 });
 
 test('a hook that cannot be registered fails the load like any other, also one for the requests built outside a turn', async t => {

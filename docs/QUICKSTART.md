@@ -36,7 +36,7 @@ opencode models
 ## 2. Install the package (terminal)
 
 ```sh
-opencode plugin add opencode-azure-devops-pr-review@0.5.2
+opencode plugin add opencode-azure-devops-pr-review@0.5.3
 ```
 
 This is the host's native package installation; no npm account or separate
@@ -48,7 +48,7 @@ update an entry such as `…@latest` by themselves, which ends a review that is
 running ([installation](../README.md#native-package-npm-or-git)).
 
 To install the same release from Git instead of the npm registry, use
-`opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.5.2'`.
+`opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.5.3'`.
 Add only one of the two. For a source archive or an existing source
 installation, see [other installation methods](#other-installation-methods).
 
@@ -350,7 +350,7 @@ The installer carries a settings file of 0.4.x over exactly as it is;
 Do not load both copies in the same OpenCode profile.
 
 Prefer a source archive? Download and extract the
-[v0.5.2 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.5.2.tar.gz),
+[v0.5.3 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.5.3.tar.gz),
 then run `sh install.sh --config-dir /absolute/path/to/your/opencode-config`
 inside it. That directory must be the one your OpenCode actually loads. The
 source installer creates starter settings: `/pr-setup` in the terminal UI
