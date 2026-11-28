@@ -95,7 +95,8 @@ Findings still vary between models and runs; see
 Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9 and tmux
 3.2a; OpenCode CLI 2.4.2, with isolated OpenCode profiles and the fake model
 and Azure DevOps services. The runs below were made on the candidate's commit
-`84fa523`; the commit after it changes only documents.
+`4fdab18`; the commits before it, `84fa523` and `28a4e2d`, gave the same
+results, and the commits after it change only documents.
 
 0.5.3 ends a turn where the execution that took its prompt ended, also at a
 step OpenCode ended by an interrupt: one whose message carries OpenCode's
@@ -115,13 +116,15 @@ setting is new, and the package has the files of 0.5.2.
   classifies a turn that a step ended (without a marker, with a marker of a
   stop, a failure or an execution that had nothing to do after it, with a
   notice and a later execution after it, with another error first) and that
-  such a step does not stand in for the marker of the turn before; the
+  such a step does not stand in for the marker of the turn before, while
+  such a turn whose turn before is gone still fails by its own outcome first;
+  the
   runtime's hooks after such a step (a request where it is prepared and
   where it is sent, a retry, a native tool, AZPR's tool called through
   OpenCode and directly);
   a correction turn that a decline ended, after which the first answer
   stands.
-- Targeted mutations: 11, each taking one of the new rules out of a copy or
+- Targeted mutations: 13, each taking one of the new rules out of a copy or
   breaking it; each made a test fail, and the tests passed again once it was
   restored.
 - No undeclared names in the changed files (a scan with the repository's
@@ -141,9 +144,10 @@ setting is new, and the package has the files of 0.5.2.
   pass each. Declined without a message, the step's message carried "Step
   interrupted", no idle marker followed, and the pass FAILED as interrupted
   (`failure=permanent`, `terminal=interrupted`) without another session.
-  After a background command had ended and its notice waited in the
-  session's inbox, the decline ended the step as before, OpenCode started
-  the next execution at once, and AZPR refused its request before anything
+  Where a background command was running, the fixture let it end once the
+  next request waited for a person (a gate file), and declined when its
+  notice waited in the session's inbox: the decline ended the step as
+  before, OpenCode started the next execution at once, and AZPR refused its request before anything
   was sent (`refusedOutsideTurn` 1; two primary requests authorized, none
   after the decline); the pass FAILED the same way. With a finish reason
   that OpenCode does not know in the declined step, its message carried
