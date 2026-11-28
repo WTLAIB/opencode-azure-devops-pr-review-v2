@@ -94,7 +94,9 @@ const provider = createServer(async (request, response) => {
           counterevidence: 'No caller re-checks the flag.', location: `head:${path}:${line}`, severity: 'medium', suggestion: 'Restore the guard.' });
         // The second pass files one finding per file. The first pass files one, on the last file of the review and
         // in other words: the one thing two sessions report, which the duplicate check then has to merge.
-        const findings = input.model === SECOND ? assigned.map((path, i) => finding(`F-${i + 1}`, path, 1, `\`${named(path)}\` drops the guard before it changes state`))
+        // The finding in refund.ts holds a "1" in its words, so that the host's own search, which finds the letters of
+        // a query in their order anywhere in a title, would list it for "F-1" beside F-1 (see the adjustment below).
+        const findings = input.model === SECOND ? assigned.map((path, i) => finding(`F-${i + 1}`, path, 1, `\`${named(path)}\` drops the guard before it changes state${named(path) === 'refund' ? ' in 1 of 2 calls' : ''}`))
           : assigned.filter(path => path === LAST_FILE).map(path => finding('F-1', path, 2, `\`${named(path)}\` is written without the guard`));
         final = { status: 'COMPLETE', coverage: { files: assigned, gaps: [] }, findings, report: `Shard ${assignment.shard} reviewed.` };
       }
@@ -643,12 +645,13 @@ try {
   await click('Adjust findings…');
   await see(/Adjust the findings before posting/, 'A click did not open the list of findings.');
   assert.doesNotMatch(screen(), /Apply, and plan the preview|apply ctrl\+s/, 'Something is to apply before anything was changed.');
-  // Typing filters the list by AZPR's own search; the finding typed in full comes first. The host draws a list
-  // searched that way without category headings, and the row still shows its level.
+  // An ID typed in full lists that finding alone, with its level. The host's own search would also list the finding
+  // in refund.ts, whose words hold a "1" (past the width the row shows), so one frame must show F-1 and no other
+  // finding.
+  assert.match(screen(), /F-3 — `refund` drops the guard/, 'The list does not show the finding in refund.ts.');
   type('F-1');
-  await see(/F-1 — `invoice` drops the guard\b[^\n]* high\b/, 'Typing does not filter the findings, or the row does not show its level.');
-  assert.doesNotMatch(screen(), /F-2 — /, 'Typing did not filter the findings.');
-  assert.doesNotMatch(screen(), /Findings[^\n]*\n[^\n]*F-1 — /, 'The list of findings was not searched by AZPR\'s own search: it still has its category heading.');
+  await see(shown => /F-1 — `invoice` drops the guard\b[^\n]* high\b/.test(shown) && !/F-\d+ — `(?!invoice`)/.test(shown),
+    'Typing the ID did not list that finding alone, with its level: the list was not searched by AZPR\'s own search.');
   key('Enter');
   await see(/F-1: how is it published\?/, 'Picking a finding did not ask what happens to it.');
   // The level the review gave it is the rating's: its reviewer filed it as medium.

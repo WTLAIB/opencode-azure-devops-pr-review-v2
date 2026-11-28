@@ -825,12 +825,14 @@ settings, backups and failure records. Never upload `.local/`.
   in a title, the best match selected): the key that opened the question,
   pressed once more than meant, is typed into it and must leave no row to
   take. What is typed into the list of findings answers by AZPR's own search
-  (`byWords`): an ID typed in full lists the finding of that ID alone, and no
-  row where the list has none, so that no other finding stands in for one
-  that is not offered; anything else lists the rows that hold every word
-  typed, in the order the findings are listed. The host's search listed F-11
-  first for `F-1` among twelve findings, and Enter took it. The host draws a
-  list with a search of its own without category headings and shows a row's
+  (`byWords`): an ID typed in full (letters, a hyphen and digits, which a word
+  such as `UTF-8` is too) lists the finding of that ID alone, and no row where
+  the list has none, so that no other finding stands in for one that is not
+  offered; anything else lists the rows whose title holds every word typed,
+  compared in upper case, in the order the findings are listed. The host's
+  search listed F-11 first for `F-1` among twelve findings, and Enter took
+  it. OpenCode 2.3.0 to the tested version show a list with a search of its
+  own as that search returns it, without category headings, and show a row's
   category in place of its footer, so those rows carry none. An adjustment
   gives both lists in full, since each replaces the saved one.
   One action runs at a time, and after `stop()` nothing is asked or sent,

@@ -36,23 +36,27 @@ const byBeginning = (query, options) => {
   return typed ? options.filter(option => String(option.title).toLowerCase().startsWith(typed)) : [...options];
 };
 
-// A query that is a finding's ID as reviews write them (`F-12`; reviews of 0.4.x also `R-` and `Q-`).
-const ID_QUERY = /^[a-z]+-\d+$/;
+// A query that is a finding's ID as reviews write them (`F-12`; reviews of 0.4.x also `R-` and `Q-`), compared in
+// upper case. Upper case maps each letter the same way wherever it stands in a word; lower case gives a Greek sigma
+// at a word's end another form than within the word, so a word typed in full would miss the title that holds it.
+const ID_QUERY = /^[A-Z]+-\d+$/;
+const fold = text => String(text ?? '').toUpperCase();
 
 /**
  * How the list of findings answers to what is typed into its search line. An ID typed in full lists the finding
  * of that ID alone, and no row where the list holds none: a finding that is not offered is not stood in for by
- * one whose ID or text holds those characters. Anything else lists the rows whose title holds every word typed,
- * wherever it stands, in the order they are listed; nothing typed lists them all. There a person looks for one of
+ * one whose ID or text holds those characters; a word of that form (`UTF-8`) is taken for an ID too. Anything else
+ * lists the rows whose title holds every word typed, wherever it stands, in the order they are listed; nothing
+ * typed lists them all. Only the titles are searched, not what a row shows beside them. There a person looks for one of
  * many, by its ID or by a word of it. The host's own search lists the best match first: among twelve findings `F-1`
  * listed F-11 first, and Enter took it.
  */
 const byWords = (query, options) => {
-  const typed = String(query ?? '').trim().toLowerCase();
+  const typed = fold(query).trim();
   if (!typed) return [...options];
-  if (ID_QUERY.test(typed)) return options.filter(option => String(option.value).toLowerCase() === typed);
+  if (ID_QUERY.test(typed)) return options.filter(option => fold(option.value) === typed);
   const words = typed.split(/\s+/);
-  return options.filter(option => { const title = String(option.title).toLowerCase(); return words.every(word => title.includes(word)); });
+  return options.filter(option => { const title = fold(option.title); return words.every(word => title.includes(word)); });
 };
 
 /** The level the review itself gave a finding. */
